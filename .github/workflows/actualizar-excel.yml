@@ -17,28 +17,38 @@ jobs:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
-      - name: Descargar Excel desde OneDrive
+      - name: Descargar Excel desde Microsoft Excel Online
         run: |
           curl -L --fail --retry 3 \
-            "https://jlbcorporacioncompe-my.sharepoint.com/:x:/g/personal/zoila_quintana_jlbcorporacion_com_pe/IQAokIeF3SG2S7r_-TtBJU13AZtUmkkWr1fg5Qi1SNfCnxk?download=1" \
+            "https://usc-excel.officeapps.live.com/x/_layouts/XlFileHandler.aspx?WacUserType=WOPI&NoAuth=1&usid=200e9c2c-d441-68bb-4edf-7fd9fdb42efe&waccluster=GCL1" \
             -o ventas_claro.xlsx
 
-      - name: Verificar que el archivo sea un Excel
+      - name: Verificar descarga
         run: |
+          echo "Tamaño del archivo:"
+          ls -lh ventas_claro.xlsx
+
           if [ ! -s ventas_claro.xlsx ]; then
-            echo "ERROR: El archivo descargado esta vacio."
+            echo "ERROR: El archivo descargado está vacío."
             exit 1
           fi
 
-          echo "Excel descargado correctamente."
-          ls -lh ventas_claro.xlsx
+          TIPO=$(file -b ventas_claro.xlsx)
+          echo "Tipo detectado: $TIPO"
 
-      - name: Guardar fecha y hora de actualizacion
+          if ! unzip -t ventas_claro.xlsx >/dev/null 2>&1; then
+            echo "ERROR: Microsoft respondió, pero lo descargado no parece ser un Excel XLSX válido."
+            exit 1
+          fi
+
+          echo "OK: Se descargó un XLSX válido."
+
+      - name: Guardar fecha y hora de actualización
         run: |
           TZ="America/Lima" date '+%d/%m/%Y · %I:%M %p' > ultima_actualizacion.txt
           cat ultima_actualizacion.txt
 
-      - name: Guardar Excel actualizado en GitHub
+      - name: Guardar actualización en GitHub
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -46,8 +56,8 @@ jobs:
           git add ventas_claro.xlsx ultima_actualizacion.txt
 
           if git diff --cached --quiet; then
-            echo "No hay cambios nuevos."
+            echo "El Excel no presentó cambios."
           else
-            git commit -m "Actualizar Excel desde OneDrive"
+            git commit -m "Actualizar Excel automáticamente"
             git push
           fi
