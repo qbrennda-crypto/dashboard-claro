@@ -1,0 +1,1815 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Claro | Dashboard V4</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js">
+function saveMonthlyGoal(){
+ const mk=$('month').value||'ALL', v=Math.max(0,Number($('monthlyGoalInput').value)||0);
+ localStorage.setItem('claro_goal_month_'+mk,v); $('goalMonthlyMgmt').value=v; renderAll();
+}
+function loadV4Config(){
+ const mk=$('month').value||'ALL', g=monthGoal(mk);
+ if($('monthlyGoalInput'))$('monthlyGoalInput').value=g;
+ if($('goalMonthlyMgmt'))$('goalMonthlyMgmt').value=g;
+ if($('goalSellerInput'))$('goalSellerInput').value=mgmtGoal('goal_seller',mk);
+ if($('goalSupInput'))$('goalSupInput').value=mgmtGoal('goal_sup',mk);
+ if($('goalJlbInput'))$('goalJlbInput').value=mgmtGoal('goal_jlb',mk);
+}
+function saveMgmtGoals(){
+ const mk=$('month').value||'ALL';
+ localStorage.setItem('claro_goal_seller_'+mk,$('goalSellerInput').value);
+ localStorage.setItem('claro_goal_sup_'+mk,$('goalSupInput').value);
+ localStorage.setItem('claro_goal_jlb_'+mk,$('goalJlbInput').value);
+ localStorage.setItem('claro_goal_month_'+mk,Math.max(0,Number($('goalMonthlyMgmt').value)||0));
+ $('monthlyGoalInput').value=$('goalMonthlyMgmt').value; renderAll();
+}
+
+function renderMonthlyCards(){
+ const topRej=$('monthlyRejectedTop');
+ if(topRej) topRej.style.display=viewMode==='production'?'block':'none';
+ if(viewMode!=='production') return;
+
+ const mk=$('month').value;
+ const zone=$('zone').value;
+
+ // Monthly is independent from hidden Control Diario filters.
+ // Installed production: ESTADO INSTALADO + FECHA DE INSTALACIÓN in selected month + ZONA only.
+ const prod=rows.filter(r =>
+   installed(r) &&
+   r.instalacion &&
+   (!mk || monthKey(r.instalacion)===mk) &&
+   (!zone || zone==='TODAS' || r.zona===zone)
+ );
+
+ // Rejected monthly: rejected operations entered in selected month + ZONA.
+ const rej=rows.filter(r =>
+   rejected(r) &&
+   r.ingreso &&
+   (!mk || monthKey(r.ingreso)===mk) &&
+   (!zone || zone==='TODAS' || r.zona===zone)
+ );
+ if($('monthlyRejectedCount')) $('monthlyRejectedCount').textContent=rej.length;
+
+ const put=(id,v)=>{const e=$(id);if(e)e.textContent=v};
+
+ function extremes(field){
+   const c={};
+   prod.forEach(r=>{
+     const n=String(r[field]||'').trim();
+     if(n)c[n]=(c[n]||0)+1;
+   });
+   const a=Object.entries(c).map(([name,count])=>({name,count}))
+     .sort((x,y)=>y.count-x.count||x.name.localeCompare(y.name,'es'));
+   return a.length?{best:a[0],worst:a[a.length-1]}:null;
+ }
+ const se=extremes('asesor'), su=extremes('supervisor');
+ if(se){
+   put('bestSellerMonth',se.best.name);put('bestSellerProd',`${se.best.count} instalada${se.best.count===1?'':'s'}`);
+   put('worstSellerMonth',se.worst.name);put('worstSellerProd',`${se.worst.count} instalada${se.worst.count===1?'':'s'}`);
+   const d=se.best.count-se.worst.count;put('sellerProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+ }else{
+   put('bestSellerMonth','—');put('bestSellerProd','0 instaladas');put('worstSellerMonth','—');put('worstSellerProd','0 instaladas');put('sellerProdGap','Diferencia: 0 instalaciones');
+ }
+ if(su){
+   put('bestSupMonth',su.best.name);put('bestSupProd',`${su.best.count} instalada${su.best.count===1?'':'s'}`);
+   put('worstSupMonth',su.worst.name);put('worstSupProd',`${su.worst.count} instalada${su.worst.count===1?'':'s'}`);
+   const d=su.best.count-su.worst.count;put('supProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+ }else{
+   put('bestSupMonth','—');put('bestSupProd','0 instaladas');put('worstSupMonth','—');put('worstSupProd','0 instaladas');put('supProdGap','Diferencia: 0 instalaciones');
+ }
+
+ // MODALIDAD directly from Excel.
+ const bio=prod.filter(r=>/BIOMET|HUELL/.test(norm(r.modalidad))).length;
+ const grab=prod.filter(r=>/GRAB/.test(norm(r.modalidad))).length;
+ put('monthlyBio',bio);put('monthlyGrab',grab);
+
+ // PRODUCTO directly from Excel = plan/paquete.
+ const pc={};
+ prod.forEach(r=>{
+   const p=String(r.producto||'').trim();
+   if(p)pc[p]=(pc[p]||0)+1;
+ });
+ const packs=Object.entries(pc).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'es'));
+ if(packs.length){
+   put('topPackageMonth',packs[0][0]);
+   put('topPackageCount',`${packs[0][1]} instalada${packs[0][1]===1?'':'s'}`);
+   if($('packageSummaryMonth')) $('packageSummaryMonth').innerHTML=(()=>{const mx=Math.max(...packs.map(x=>x[1]),1);return packs.map(([k,v])=>`<div class="product-bar-row"><div class="product-bar-label" title="${k}">${k}</div><div class="product-bar-track"><div class="product-bar-fill" style="width:${(v/mx)*100}%"></div></div><div class="product-bar-value">${v}</div></div>`).join('')})();
+ }else{
+   put('topPackageMonth','—');put('topPackageCount','0 instaladas');
+   if($('packageSummaryMonth'))$('packageSummaryMonth').innerHTML='';
+ }
+}
+
+function renderV4(){
+ loadV4Config();
+ const {paid}=periodSets(), base=activeRows();
+ const rej=filtered.filter(rejected);
+ if($('v4Rejected'))$('v4Rejected').textContent=rej.length;
+ const bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+ const grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+ if($('v4Bio'))$('v4Bio').textContent=`${bio} / ${grab}`;
+ const rc={};rej.forEach(r=>rc[rejectCategory(r)]=(rc[rejectCategory(r)]||0)+1);
+ if($('rejectSummary'))$('rejectSummary').innerHTML=Object.entries(rc).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin rechazadas</div>';
+ if($('validationSummary'))$('validationSummary').innerHTML=`<p><b>Biometría / Huellero:</b> ${bio}</p><p><b>Grabación:</b> ${grab}</p><p><b>Por clasificar:</b> ${paid.length-bio-grab}</p>`;
+ const z={};paid.forEach(r=>{let k=norm(r.zona)||'SIN ZONA';z[k]=(z[k]||0)+1});
+ if($('zoneSummaryV4'))$('zoneSummaryV4').innerHTML=Object.entries(z).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin datos</div>';
+ renderEconomicSellers(paid);
+}
+function renderEconomicSellers(paid){
+ if(!$('economicSellerSummary'))return;
+ const names=[...new Set([...personnel.filter(p=>/VENDEDOR/.test(norm(p.rol))).map(p=>p.nombre),...paid.map(r=>r.asesor)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+ let body='';
+ names.forEach(name=>{
+  const list=paid.filter(r=>norm(r.asesor)===norm(name)).sort((a,b)=>(a.instalacion||0)-(b.instalacion||0));
+  const total=list.reduce((s,r)=>s+r.cargo,0), excess=Math.max(0,total-750);
+  let running=0, commission=0, unclassified=0;
+  list.forEach(r=>{
+   const before=running, after=running+r.cargo, commPart=Math.max(0,after-Math.max(750,before));
+   const rate=commissionRate(r);
+   if(commPart>0){if(rate==null)unclassified+=commPart;else commission+=commPart*rate;}
+   running=after;
+  });
+  const p=personInfo(name), contract=p?.contrato||'SIN DEFINIR';
+  body+=`<tr><td>${name}</td><td>${contract}</td><td>${list.length}</td><td>${money(total)}</td><td>S/ 750.00</td><td>${money(excess)}</td><td>${money(commission)}</td><td>${unclassified?`⚠️ ${money(unclassified)}`:'OK'}</td></tr>`;
+ });
+ $('economicSellerSummary').innerHTML=`<table><thead><tr><th>Vendedor</th><th>Contrato</th><th>Instaladas</th><th>Cargo fijo acumulado</th><th>Base</th><th>Excedente</th><th>Comisión calculada</th><th>Por clasificar</th></tr></thead><tbody>${body||'<tr><td colspan="8">Sin datos</td></tr>'}</tbody></table>`;
+}
+const _renderAllV35 = renderAll;
+renderAll = function(){ _renderAllV35(); renderV4(); renderMonthlyCards(); 
+ if($('monthlyConfig'))$('monthlyConfig').style.display=viewMode==='production'?'block':'none';
+ if($('managementConfig'))$('managementConfig').style.display=viewMode==='economic'?'block':'none';
+};
+
+
+function renderV41(){
+  document.body.classList.remove('mode-commercial','mode-production','mode-economic');
+  document.body.classList.add('mode-'+viewMode);
+  let ps=periodSets(), paid=ps.paid||[], base=activeRows();
+  let goal=monthGoal($('month').value), pct=goal?paid.length/goal*100:0;
+
+  // Daily activity is always FECHA DE INGRESO.
+  let todayKey=ymd(new Date());
+  let enteredPeriod=(ps.entered||[]);
+  let todayRows=enteredPeriod.filter(r=>r.ingreso && ymd(r.ingreso)===todayKey);
+  let sellers=[...new Set(base.map(r=>r.asesor).filter(Boolean))];
+  let activeNames=new Set(todayRows.map(r=>norm(r.asesor)).filter(Boolean));
+  let active=sellers.filter(n=>activeNames.has(norm(n))).length;
+
+  if($('v41Today')) $('v41Today').textContent=todayRows.length;
+  if($('v41Active')) $('v41Active').textContent=`${active} / ${sellers.length}`;
+  if($('v41Inactive')) $('v41Inactive').textContent=`${Math.max(0,sellers.length-active)} sin actividad`;
+  if($('v41EnteredMonth')) $('v41EnteredMonth').textContent=enteredPeriod.length;
+
+  // Reuse business-day denominator already conceptually used in V3.x: Mon-Sat.
+  let mk=$('month').value, denom=1;
+  if(mk){
+    let [yy,mm]=mk.split('-').map(Number), now=new Date(), last=(now.getFullYear()==yy&&now.getMonth()+1==mm)?now.getDate():new Date(yy,mm,0).getDate();
+    denom=0;
+    for(let d=1;d<=last;d++) if(new Date(yy,mm-1,d).getDay()!=0) denom++;
+    denom=Math.max(1,denom);
+  }
+  if($('v41Avg')) $('v41Avg').textContent=(enteredPeriod.length/denom).toFixed(1);
+
+  if($('v41Prod')) $('v41Prod').textContent=paid.length;
+  if($('v41Goal')) $('v41Goal').textContent=goal;
+  if($('v41Missing')) $('v41Missing').textContent=Math.max(0,goal-paid.length);
+  if($('v41GoalPct')) $('v41GoalPct').textContent=`${pct.toFixed(1)}% de cumplimiento`;
+  if($('v41GoalBar')) $('v41GoalBar').style.width=Math.min(100,pct)+'%';
+
+  let rej=filtered.filter(rejected);
+  if($('v41Rejected')) $('v41Rejected').textContent=rej.length;
+  let bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+  let grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+  if($('v41Validation')) $('v41Validation').textContent=`${bio} / ${grab}`;
+
+  // Clarify section header
+  let sum=document.querySelector('.summaryline');
+  if(sum){
+    let label=viewMode==='commercial'?'CONTROL DIARIO':viewMode==='production'?'MENSUAL':'GERENCIA';
+    sum.innerHTML=sum.innerHTML.replace(/CONTROL DIARIO|MENSUAL|GERENCIA|CONTROL COMERCIAL/g,label);
+  }
+}
+const _renderAllV4 = renderAll;
+renderAll=function(){_renderAllV4();renderV41();};
+setTimeout(()=>{if(viewMode==='commercial')openDailyTrackingTab();},0);
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js">
+function saveMonthlyGoal(){
+ const mk=$('month').value||'ALL', v=Math.max(0,Number($('monthlyGoalInput').value)||0);
+ localStorage.setItem('claro_goal_month_'+mk,v); $('goalMonthlyMgmt').value=v; renderAll();
+}
+function loadV4Config(){
+ const mk=$('month').value||'ALL', g=monthGoal(mk);
+ if($('monthlyGoalInput'))$('monthlyGoalInput').value=g;
+ if($('goalMonthlyMgmt'))$('goalMonthlyMgmt').value=g;
+ if($('goalSellerInput'))$('goalSellerInput').value=mgmtGoal('goal_seller',mk);
+ if($('goalSupInput'))$('goalSupInput').value=mgmtGoal('goal_sup',mk);
+ if($('goalJlbInput'))$('goalJlbInput').value=mgmtGoal('goal_jlb',mk);
+}
+function saveMgmtGoals(){
+ const mk=$('month').value||'ALL';
+ localStorage.setItem('claro_goal_seller_'+mk,$('goalSellerInput').value);
+ localStorage.setItem('claro_goal_sup_'+mk,$('goalSupInput').value);
+ localStorage.setItem('claro_goal_jlb_'+mk,$('goalJlbInput').value);
+ localStorage.setItem('claro_goal_month_'+mk,Math.max(0,Number($('goalMonthlyMgmt').value)||0));
+ $('monthlyGoalInput').value=$('goalMonthlyMgmt').value; renderAll();
+}
+function renderV4(){
+ loadV4Config();
+ const {paid}=periodSets(), base=activeRows();
+ const rej=filtered.filter(rejected);
+ if($('v4Rejected'))$('v4Rejected').textContent=rej.length;
+ const bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+ const grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+ if($('v4Bio'))$('v4Bio').textContent=`${bio} / ${grab}`;
+ const rc={};rej.forEach(r=>rc[rejectCategory(r)]=(rc[rejectCategory(r)]||0)+1);
+ if($('rejectSummary'))$('rejectSummary').innerHTML=Object.entries(rc).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin rechazadas</div>';
+ if($('validationSummary'))$('validationSummary').innerHTML=`<p><b>Biometría / Huellero:</b> ${bio}</p><p><b>Grabación:</b> ${grab}</p><p><b>Por clasificar:</b> ${paid.length-bio-grab}</p>`;
+ const z={};paid.forEach(r=>{let k=norm(r.zona)||'SIN ZONA';z[k]=(z[k]||0)+1});
+ if($('zoneSummaryV4'))$('zoneSummaryV4').innerHTML=Object.entries(z).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin datos</div>';
+ renderEconomicSellers(paid);
+}
+function renderEconomicSellers(paid){
+ if(!$('economicSellerSummary'))return;
+ const names=[...new Set([...personnel.filter(p=>/VENDEDOR/.test(norm(p.rol))).map(p=>p.nombre),...paid.map(r=>r.asesor)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+ let body='';
+ names.forEach(name=>{
+  const list=paid.filter(r=>norm(r.asesor)===norm(name)).sort((a,b)=>(a.instalacion||0)-(b.instalacion||0));
+  const total=list.reduce((s,r)=>s+r.cargo,0), excess=Math.max(0,total-750);
+  let running=0, commission=0, unclassified=0;
+  list.forEach(r=>{
+   const before=running, after=running+r.cargo, commPart=Math.max(0,after-Math.max(750,before));
+   const rate=commissionRate(r);
+   if(commPart>0){if(rate==null)unclassified+=commPart;else commission+=commPart*rate;}
+   running=after;
+  });
+  const p=personInfo(name), contract=p?.contrato||'SIN DEFINIR';
+  body+=`<tr><td>${name}</td><td>${contract}</td><td>${list.length}</td><td>${money(total)}</td><td>S/ 750.00</td><td>${money(excess)}</td><td>${money(commission)}</td><td>${unclassified?`⚠️ ${money(unclassified)}`:'OK'}</td></tr>`;
+ });
+ $('economicSellerSummary').innerHTML=`<table><thead><tr><th>Vendedor</th><th>Contrato</th><th>Instaladas</th><th>Cargo fijo acumulado</th><th>Base</th><th>Excedente</th><th>Comisión calculada</th><th>Por clasificar</th></tr></thead><tbody>${body||'<tr><td colspan="8">Sin datos</td></tr>'}</tbody></table>`;
+}
+const _renderAllV35 = renderAll;
+renderAll = function(){ _renderAllV35(); renderV4(); 
+ if($('monthlyConfig'))$('monthlyConfig').style.display=viewMode==='production'?'block':'none';
+ if($('managementConfig'))$('managementConfig').style.display=viewMode==='economic'?'block':'none';
+};
+
+
+function renderV41(){
+  document.body.classList.remove('mode-commercial','mode-production','mode-economic');
+  document.body.classList.add('mode-'+viewMode);
+  let ps=periodSets(), paid=ps.paid||[], base=activeRows();
+  let goal=monthGoal($('month').value), pct=goal?paid.length/goal*100:0;
+
+  // Daily activity is always FECHA DE INGRESO.
+  let todayKey=ymd(new Date());
+  let enteredPeriod=(ps.entered||[]);
+  let todayRows=enteredPeriod.filter(r=>r.ingreso && ymd(r.ingreso)===todayKey);
+  let sellers=[...new Set(base.map(r=>r.asesor).filter(Boolean))];
+  let activeNames=new Set(todayRows.map(r=>norm(r.asesor)).filter(Boolean));
+  let active=sellers.filter(n=>activeNames.has(norm(n))).length;
+
+  if($('v41Today')) $('v41Today').textContent=todayRows.length;
+  if($('v41Active')) $('v41Active').textContent=`${active} / ${sellers.length}`;
+  if($('v41Inactive')) $('v41Inactive').textContent=`${Math.max(0,sellers.length-active)} sin actividad`;
+  if($('v41EnteredMonth')) $('v41EnteredMonth').textContent=enteredPeriod.length;
+
+  // Reuse business-day denominator already conceptually used in V3.x: Mon-Sat.
+  let mk=$('month').value, denom=1;
+  if(mk){
+    let [yy,mm]=mk.split('-').map(Number), now=new Date(), last=(now.getFullYear()==yy&&now.getMonth()+1==mm)?now.getDate():new Date(yy,mm,0).getDate();
+    denom=0;
+    for(let d=1;d<=last;d++) if(new Date(yy,mm-1,d).getDay()!=0) denom++;
+    denom=Math.max(1,denom);
+  }
+  if($('v41Avg')) $('v41Avg').textContent=(enteredPeriod.length/denom).toFixed(1);
+
+  if($('v41Prod')) $('v41Prod').textContent=paid.length;
+  if($('v41Goal')) $('v41Goal').textContent=goal;
+  if($('v41Missing')) $('v41Missing').textContent=Math.max(0,goal-paid.length);
+  if($('v41GoalPct')) $('v41GoalPct').textContent=`${pct.toFixed(1)}% de cumplimiento`;
+  if($('v41GoalBar')) $('v41GoalBar').style.width=Math.min(100,pct)+'%';
+
+  let rej=filtered.filter(rejected);
+  if($('v41Rejected')) $('v41Rejected').textContent=rej.length;
+  let bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+  let grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+  if($('v41Validation')) $('v41Validation').textContent=`${bio} / ${grab}`;
+
+  // Clarify section header
+  let sum=document.querySelector('.summaryline');
+  if(sum){
+    let label=viewMode==='commercial'?'CONTROL DIARIO':viewMode==='production'?'MENSUAL':'GERENCIA';
+    sum.innerHTML=sum.innerHTML.replace(/CONTROL DIARIO|MENSUAL|GERENCIA|CONTROL COMERCIAL/g,label);
+  }
+}
+const _renderAllV4 = renderAll;
+renderAll=function(){_renderAllV4();renderV41();};
+
+</script>
+<style>
+:root{--red:#e30613;--red2:#b9000b;--ink:#172033;--muted:#6b7280;--bg:#f5f7fb;--card:#fff;--line:#e5e7eb;--green:#118a55;--amber:#d97706;--blue:#2563eb}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:linear-gradient(110deg,var(--red),var(--red2));color:white;padding:22px 28px;box-shadow:0 8px 25px #9d00162b}
+.head{max-width:1500px;margin:auto;display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap}
+h1{margin:0;font-size:26px}.sub{opacity:.9;margin-top:5px;font-size:13px}
+button,.btn{border:0;border-radius:10px;padding:11px 15px;font-weight:700;cursor:pointer}.primary{background:white;color:var(--red)}.ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+main{max-width:1500px;margin:20px auto;padding:0 18px 45px}.notice{background:#fff7ed;border:1px solid #fed7aa;padding:12px 14px;border-radius:12px;margin-bottom:14px;font-size:13px}
+.filters{background:white;border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;grid-template-columns:repeat(8,minmax(120px,1fr));gap:10px;box-shadow:0 3px 12px #1118270a}
+select,input{width:100%;padding:10px;border:1px solid #d7dce3;border-radius:9px;background:white}.label{font-size:11px;color:var(--muted);font-weight:800;margin-bottom:5px;text-transform:uppercase}
+.context{margin:14px 2px 8px;font-size:13px;color:var(--muted)}.context b{color:var(--ink)}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:12px 0}.card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:15px;box-shadow:0 4px 14px #1118270b}
+.kpi .t{font-size:11px;color:var(--muted);font-weight:800;text-transform:uppercase}.kpi .v{font-size:28px;font-weight:850;margin-top:5px}.kpi .s{font-size:12px;color:var(--muted);margin-top:3px}.red{color:var(--red)}.green{color:var(--green)}.amber{color:var(--amber)}
+.progress{height:8px;background:#edf0f4;border-radius:999px;overflow:hidden;margin-top:8px}.bar{height:100%;background:var(--red);width:0}
+.tabs{display:flex;gap:8px;margin:18px 0 10px;flex-wrap:wrap}.tab{background:white;border:1px solid var(--line);color:var(--ink)}.tab.active{background:var(--red);color:#fff;border-color:var(--red)}
+.grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+h2{font-size:16px;margin:0 0 12px}.chartbox{height:300px}.tablewrap{overflow:auto;max-height:520px;border-radius:10px;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-size:12px;background:white}th{position:sticky;top:0;background:#f8fafc;z-index:1;text-align:left;color:#4b5563;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap}td{padding:9px 10px;border-bottom:1px solid #eef0f3;white-space:nowrap}tr.clickable:hover{background:#fff1f2;cursor:pointer}
+.badge{padding:4px 7px;border-radius:999px;font-size:10px;font-weight:800}.ok{background:#dcfce7;color:#166534}.bad{background:#fee2e2;color:#991b1b}.wait{background:#fef3c7;color:#92400e}.neutral{background:#e0e7ff;color:#3730a3}
+.section{display:none}.section.active{display:block}.dailytop{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px}
+.drawer{position:fixed;inset:0;background:#11182780;display:none;z-index:20}.drawer.show{display:block}.panel{position:absolute;right:0;top:0;height:100%;width:min(850px,96vw);background:var(--bg);padding:20px;overflow:auto;box-shadow:-15px 0 40px #11182733}.close{float:right;background:white;border:1px solid var(--line)}
+.panelhead{background:white;border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}.panelhead h2{font-size:21px}.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:12px 0}.mini .card{padding:12px}.mini .v{font-size:20px;font-weight:850}
+.empty{text-align:center;color:var(--muted);padding:35px}.footer{font-size:11px;color:var(--muted);margin-top:12px}
+@media(max-width:1050px){.filters{grid-template-columns:repeat(3,1fr)}.kpis{grid-template-columns:repeat(3,1fr)}.grid2,.grid3{grid-template-columns:1fr}.dailytop{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:620px){.filters{grid-template-columns:1fr 1fr}.kpis,.dailytop,.mini{grid-template-columns:1fr 1fr}.kpi .v{font-size:23px}}
+
+body.meeting .moneyOnly, body.meeting .moneyCol{display:none!important}
+body.meeting td.moneyCell{display:none!important}
+.modebtn{font-size:14px}
+.modebtn.active{background:#172033;color:#fff;border-color:#172033}
+#mainModes{margin-bottom:10px}
+.ind-low{color:#dc2626!important}.ind-mid{color:#d97706!important}.ind-ok{color:#16a34a!important}
+.progress .bar.ind-bg-low{background:#dc2626!important}.progress .bar.ind-bg-mid{background:#d97706!important}.progress .bar.ind-bg-ok{background:#16a34a!important}
+.goalpill{display:inline-block;padding:4px 9px;border-radius:999px;font-weight:800;font-size:12px}
+.goalpill.low{background:#fee2e2;color:#b91c1c}.goalpill.mid{background:#fef3c7;color:#b45309}.goalpill.ok{background:#dcfce7;color:#15803d}
+
+/* ===== V4.1: separación real por objetivo ===== */
+body.mode-commercial #kpiInstalled,
+body.mode-commercial #kpiMissing,
+body.mode-commercial #kpiClose { display:none !important; }
+
+body.mode-production #kpiEntered,
+body.mode-economic #kpiEntered { display:none !important; }
+
+#dailyHeroV41{display:none}
+body.mode-commercial #dailyHeroV41{display:grid}
+#monthlyHeroV41{display:none}
+body.mode-production #monthlyHeroV41{display:grid}
+
+.v41hero{grid-template-columns:1.2fr 1fr 1fr 1fr;gap:12px;margin:14px 0}
+.v41hero .hero-main{padding:20px}
+.v41hero .big{font-size:38px;font-weight:900;line-height:1}
+.v41hero .mini{font-size:12px;color:#64748b;margin-top:7px}
+.v41-progress{height:12px;background:#e9eef5;border-radius:999px;overflow:hidden;margin-top:12px}
+.v41-progress>div{height:100%;background:#ef0016;border-radius:999px}
+.v41-stat{display:flex;flex-direction:column;justify-content:center;min-height:112px}
+.v41-stat .num{font-size:28px;font-weight:900;margin-top:5px}
+@media(max-width:900px){.v41hero{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.v41hero{grid-template-columns:1fr}}
+
+
+body.mode-commercial #legacyKpis, body.mode-production #legacyKpis{display:none!important}
+
+body.mode-commercial #supTable th:nth-child(n+5),
+body.mode-commercial #supTable td:nth-child(n+5){display:none!important}
+
+/* Ajuste enfocado SOLO en Control Diario */
+body.mode-commercial #filterSup,
+body.mode-commercial #filterSeller,
+body.mode-commercial #filterStatus,
+body.mode-commercial #filterMode,
+body.mode-commercial #filterContract {display:none!important}
+body.mode-commercial .filters{grid-template-columns:repeat(3,minmax(180px,1fr))}
+.daily-sup-row td{background:#f8fafc;border-top:2px solid #e5e7eb}
+.daily-seller-row td:first-child{padding-left:34px}
+.daily-seller-row.zero td{color:#6b7280}
+.daily-status{display:inline-block;padding:5px 9px;border-radius:999px;font-size:11px;font-weight:900;white-space:nowrap}
+.daily-status.ok{background:#dcfce7;color:#15803d}
+.daily-status.mid{background:#fef3c7;color:#b45309}
+.daily-status.low{background:#fee2e2;color:#b91c1c}
+
+
+body.mode-commercial .commercial-hide-tab{display:none!important}
+body.mode-commercial #daily .card{overflow:visible}
+body.mode-commercial #daily .tablewrap{max-height:none}
+
+
+.daily-person-link{border:0;background:transparent;padding:0;color:inherit;font:inherit;font-weight:800;cursor:pointer;text-align:left}
+.daily-person-link:hover{text-decoration:underline;color:#2563eb}
+.daily-person-link.seller{font-weight:700}
+#dailyCompanyGoalCard .ind-ok{color:#15803d}
+#dailyCompanyGoalCard .ind-mid{color:#b45309}
+#dailyCompanyGoalCard .ind-low{color:#b91c1c}
+
+.rank-card{border:1px solid #e5e7eb;border-radius:12px;margin:7px 0;padding:10px 12px;cursor:pointer;background:#fff;display:flex;justify-content:space-between;align-items:center;gap:12px}.rank-medal{font-size:19px}.rank-value{font-size:12px;color:#6b7280;white-space:nowrap}.rank-up{color:#16a34a;font-size:20px;font-weight:900}.rank-down{color:#dc2626;font-size:20px;font-weight:900}.rank-flat{color:#64748b;font-size:17px;font-weight:900}.reject-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}.reject-chip{border:1px solid #fecaca;background:#fff7f7;color:#7f1d1d;border-radius:999px;padding:6px 10px;font-size:12px}.reject-obs{min-width:240px;white-space:normal}
+body.mode-commercial #supervisorFilterWrap,
+body.mode-commercial #sellerFilterWrap,
+body.mode-commercial #statusFilterWrap,
+body.mode-commercial #modeFilterWrap,
+body.mode-commercial #contractFilterWrap{display:none!important}
+
+body.mode-commercial .filter:has(#supervisor),
+body.mode-commercial .filter:has(#seller),
+body.mode-commercial .filter:has(#status),
+body.mode-commercial .filter:has(#mode),
+body.mode-commercial .filter:has(#contract){display:none!important}
+
+.commercial-only-tab{display:none!important}
+body.mode-commercial .commercial-only-tab{display:inline-flex!important}
+
+
+body.mode-commercial .commercial-extra-filter{display:none!important}
+body.mode-commercial button[data-tab="supervisors"],
+body.mode-commercial button[data-tab="sellers"]{display:none!important}
+
+
+.monthly-person{padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}
+.monthly-person.best{background:#f0fdf4;border-color:#bbf7d0}
+.monthly-person.worst{background:#fff7ed;border-color:#fed7aa}
+.monthly-name{font-size:17px;font-weight:800;margin-top:8px;line-height:1.25}
+.monthly-count{font-size:24px;font-weight:900;margin-top:7px}
+.monthly-gap{margin-top:10px;padding:8px 10px;border-radius:10px;background:#f8fafc;font-weight:700;text-align:center}
+
+
+body.mode-production #filterSupervisor,
+body.mode-production #filterSeller,
+body.mode-production #filterStatus,
+body.mode-production #filterMode,
+body.mode-production #filterContract {display:none !important;}
+body.mode-production .filters {grid-template-columns:minmax(150px,1fr) minmax(150px,1fr) minmax(130px,.8fr) !important;}
+
+
+/* V7: Mensual independiente: solo Mes + Zona; sin subtabs/hojas de Control Diario */
+body.mode-production #filterSupervisor,
+body.mode-production #filterSeller,
+body.mode-production #filterStatus,
+body.mode-production #filterMode,
+body.mode-production #filterContract {display:none!important;}
+body.mode-production .tabs,
+body.mode-production #general,
+body.mode-production #daily,
+body.mode-production #supervisors,
+body.mode-production #sellers,
+body.mode-production #detail {display:none!important;}
+body.mode-production .filters {grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(150px,.55fr)!important;}
+
+
+/* === V8 MENSUAL: reglas finales, no tocar Control Diario === */
+body.mode-production #filterSupervisor,
+body.mode-production #filterSeller,
+body.mode-production #filterStatus,
+body.mode-production #filterMode,
+body.mode-production #filterContract {display:none !important;}
+body.mode-production .filters {grid-template-columns:minmax(240px,1fr) minmax(240px,1fr) minmax(140px,.55fr) !important;}
+body.mode-production .tabs,
+body.mode-production #general,
+body.mode-production #daily,
+body.mode-production #supervisors,
+body.mode-production #sellers,
+body.mode-production #detail {display:none !important;}
+body.mode-production #monthlyRejectedTop {display:block !important;}
+
+/* V9 - reglas finales Mensual */
+body.mode-production #filterSup,
+body.mode-production #filterSeller,
+body.mode-production #filterStatus,
+body.mode-production #filterMode,
+body.mode-production #filterContract {display:none !important;}
+body.mode-production .filters {grid-template-columns:minmax(260px,1fr) minmax(260px,1fr) minmax(150px,.5fr) !important;}
+body.mode-production .tabs,
+body.mode-production #general,
+body.mode-production #daily,
+body.mode-production #supervisors,
+body.mode-production #sellers,
+body.mode-production #detail {display:none !important;}
+body.mode-production #monthlyRejectedTop {display:block !important;}
+
+/* V12: los botones principales SIEMPRE visibles */
+#mainModes{
+  display:flex !important;
+}
+body.mode-production #mainModes{
+  display:flex !important;
+}
+/* En Mensual se ocultan únicamente las pestañas inferiores de Control Diario */
+body.mode-production main > .tabs:not(#mainModes){
+  display:none !important;
+}
+
+/* V13: modelo visual de ranking diario - solo Control Diario / Resumen */
+.rank-bar-row{padding:10px 2px 8px;border-bottom:1px solid #e5e7eb;cursor:pointer}
+.rank-bar-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:7px}
+.rank-bar-name{font-weight:800;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank-bar-value{font-size:12px;color:#475569;white-space:nowrap}
+.rank-bar-track{height:5px;background:#e9edf2;border-radius:999px;overflow:hidden;max-width:82%}
+.rank-bar-fill{height:100%;background:#ed0712;border-radius:999px;min-width:4px}
+
+/* V14: gráfico horizontal de productos más vendidos - solo Mensual */
+.product-bars{display:flex;flex-direction:column;gap:12px;padding:6px 2px 2px}
+.product-bar-row{display:grid;grid-template-columns:minmax(105px,30%) 1fr 34px;align-items:center;gap:10px}
+.product-bar-label{font-size:12px;color:#475569;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.product-bar-track{height:34px;background:#f3f4f6;border-radius:5px;overflow:hidden;position:relative}
+.product-bar-fill{height:100%;background:#ed0712;border-radius:5px;min-width:5px}
+.product-bar-value{font-size:12px;font-weight:800;color:#334155;text-align:left}
+
+/* === V15 GERENCIA ONLY — Control Diario y Mensual bloqueados === */
+body.mode-economic #filterSup,
+body.mode-economic #filterSeller,
+body.mode-economic #filterStatus,
+body.mode-economic #filterZone,
+body.mode-economic #filterMode,
+body.mode-economic #filterContract {display:none!important;}
+body.mode-economic .filters{grid-template-columns:minmax(230px,1fr) minmax(230px,1fr) minmax(150px,.65fr)!important;}
+body.mode-economic #filterWeekMgmt{display:block!important;}
+#filterWeekMgmt{display:none;}
+body.mode-economic main>.kpis{display:none!important;}
+#gerenciaKpis{display:none;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0;}
+body.mode-economic #gerenciaKpis{display:grid!important;}
+.gkpi{min-height:128px;position:relative}
+.gkpi .t{font-size:11px;font-weight:800;text-transform:uppercase;color:#64748b}
+.gkpi .v{font-size:26px;font-weight:900;margin-top:8px;color:#07152f}
+.gkpi .s{font-size:12px;color:#64748b;margin-top:5px;line-height:1.35}
+.gkpi.good .v{color:#079447}.gkpi.warn .v{color:#d97706}.gkpi.bad .v{color:#e30613}
+.gkpi.clickable{cursor:pointer}.gkpi.clickable:hover{box-shadow:0 7px 18px #00000014;transform:translateY(-1px)}
+.mgmt-pill{display:inline-block;margin-top:7px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:900}
+.mgmt-pill.good{background:#d9fbe7;color:#067a39}.mgmt-pill.warn{background:#fff0cf;color:#9a5b00}.mgmt-pill.bad{background:#ffe0e3;color:#b4000d}
+#managementConfig .mgmt-old-config,#managementConfig .commission-table-old{display:none!important}
+#economicSellerSummary{max-height:520px;overflow:auto}
+#nonPayModal{display:none;position:fixed;inset:0;background:#0008;z-index:9999;padding:4vh 3vw;align-items:center;justify-content:center}
+#nonPayModal.open{display:flex}
+#nonPayModal .modalbox{background:#fff;border-radius:18px;width:min(1200px,96vw);max-height:90vh;overflow:auto;padding:18px;box-shadow:0 24px 60px #0005}
+#nonPayModal .modalhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+#nonPayModal table{font-size:12px}
+@media(max-width:900px){#gerenciaKpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* === V16 GERENCIA: aislar hoja 3 sin tocar Control Diario ni Mensual === */
+/* Oculta exclusivamente las pestañas y paneles inferiores de Control Diario cuando Gerencia está activa. */
+body.mode-economic main > .tabs:not(#mainModes),
+body.mode-economic #general,
+body.mode-economic #daily,
+body.mode-economic #supervisors,
+body.mode-economic #sellers,
+body.mode-economic #detail {display:none !important;}
+/* La navegación principal siempre permanece visible. */
+body.mode-economic #mainModes {display:flex !important;}
+
+/* V17 Gerencia: contexto mensual/semanal explícito */
+body.mode-economic #mgmtViewBanner{display:block!important}
+body.mode-economic.mgmt-month #gWeekGoalCard{display:none!important}
+body.mode-economic.mgmt-week #gMonthGoalCard{display:none!important}
+
+/* V19 — Solo branding del encabezado */
+.brandHeaderV19{min-height:108px;padding:18px 42px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:24px;background:linear-gradient(100deg,#c90012 0%,#e30613 55%,#c90012 100%);color:#fff;box-shadow:0 5px 18px rgba(164,0,12,.16)}
+.brandLeftV19{display:flex;align-items:center;min-width:0}
+.claroLogoWrapV19{width:145px;height:70px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.claroLogoV19{width:145px;height:145px;object-fit:cover;display:block}
+.brandDividerV19{width:1px;height:55px;background:rgba(255,255,255,.72);margin:0 24px}
+.brandTextV19 h1{margin:0 0 7px;font-size:28px;line-height:1.05;font-weight:800;color:#fff}
+.brandTextV19 div{font-size:13px;color:#fff;opacity:.96}
+.brandUploadV19{flex:0 0 auto}
+.brandUploadV19 .primary{margin:0!important;background:#fff!important;color:#d90012!important;border:0!important;border-radius:12px!important;min-height:43px;padding:0 20px!important;box-shadow:0 3px 10px rgba(90,0,0,.10);font-weight:700!important}
+@media(max-width:760px){.brandHeaderV19{padding:14px 18px;min-height:96px}.claroLogoWrapV19{width:104px;height:58px}.claroLogoV19{width:112px;height:112px}.brandDividerV19{margin:0 14px;height:48px}.brandTextV19 h1{font-size:21px}.brandTextV19 div{font-size:11px}}
+
+/* V21 — Corrección real del header: logo sin filtros */
+.brandHeaderV19{
+  min-height:96px!important;
+  padding:12px 42px!important;
+  background:#ff2419!important;
+  box-shadow:0 4px 14px rgba(120,0,10,.12)!important;
+}
+.brandLeftV19{display:flex!important;align-items:center!important}
+.claroLogoWrapV19{
+  width:150px!important;
+  height:68px!important;
+  overflow:hidden!important;
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  background:#ff2419!important;
+}
+.claroLogoV19{
+  width:150px!important;
+  height:150px!important;
+  object-fit:cover!important;
+  display:block!important;
+  filter:none!important;
+  mix-blend-mode:normal!important;
+}
+.brandDividerV19{display:none!important}
+.brandTextV19{margin-left:18px!important}
+.brandTextV19 h1{
+  margin:0 0 5px!important;
+  font-size:27px!important;
+  line-height:1.05!important;
+  font-weight:800!important;
+  color:#fff!important;
+}
+.brandTextV19 div{font-size:12px!important;color:#fff!important;opacity:1!important}
+.brandUploadV19 .primary{
+  background:#fff!important;
+  color:#e30613!important;
+  border:0!important;
+  border-radius:11px!important;
+  min-height:42px!important;
+}
+@media(max-width:760px){
+  .brandHeaderV19{padding:12px 18px!important}
+  .claroLogoWrapV19{width:112px!important;height:56px!important}
+  .claroLogoV19{width:116px!important;height:116px!important}
+  .brandTextV19{margin-left:12px!important}
+  .brandTextV19 h1{font-size:21px!important}
+}
+
+/* V22 — selector Diario/Semanal dentro de Seguimiento */
+#followMode,#reportWeek{padding:9px 11px;border:1px solid #d1d5db;border-radius:10px;background:#fff;color:#0f172a}
+
+/* V23 — Fuente automática OneDrive + respaldo manual */
+.autoSyncV23{display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+.lastUpdateV23{font-size:12px;font-weight:700;color:#fff;white-space:nowrap}
+.syncButtonsV23{display:flex;gap:8px;align-items:center}
+.brandUploadV19 .manualV23{margin:0;background:transparent;color:#fff;border:1px solid rgba(255,255,255,.75);border-radius:12px;min-height:43px;padding:0 14px;font-weight:700;cursor:pointer}
+.brandUploadV19 .manualV23:hover{background:rgba(255,255,255,.12)}
+@media(max-width:760px){.autoSyncV23{align-items:flex-start;width:100%;margin-top:8px}.syncButtonsV23{flex-wrap:wrap}.lastUpdateV23{white-space:normal}}
+</style>
+</head>
+<body>
+<header class="brandHeaderV19">
+  <div class="brandLeftV19">
+    <div class="claroLogoWrapV19"><img class="claroLogoV19" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAIAAABEtEjdAAAQAElEQVR4Aez9CZxlV3XeDT9rnVstJ6hbIo6NkQR+8/1sqVvCTmLQADi2EYPt1xhNmFkSOLEdo4EZSXhIbDNIgDFIQk7sxAFJzBpa8NmxjQA7MWiCNz/bWBPOl8QgEb9ODGoJB7ru2ev7r3O7NdYtdXVVdd2qWkf7nrPPHtZe+7/3fs6+53a3vH3vd1YoAkWgCBSBDUbAVUcRKAJFoAhsOAIl7htuSKtDReAAE6jmZpJAiftMDks5VQSKQBFYHoES9+Xxq9pFoAgUgZkkUOI+k8NSTi1MoFKLQBHYVwIl7vtKqsoVgSJQBNYRgRL3dTRY5WoRKAJFYF8JlLgvTKpSi0ARKALrmkCJ+7oevnK+CBSBIrAwgRL3hblUahEoAkVgeQTWuHaJ+xoPQDVfBIpAEVgNAiXuq0G1bBaBIlAE1phAifsaD0A1XwSWT6AsFIFHEihxfySTSikCRaAIrHsCJe7rfgirA0WgCBSBRxIocX8kk0qZTqByikARWCcEStzXyUCVm0WgCBSBpRAocV8KrSpbBIpAEVgnBGZW3NcJv3KzCBSBIjCTBErcZ3JYyqkiUASKwPIIlLgvj1/VLgJFYGYJbG7HStw39/hX74tAEdigBErcN+jAVreKQBHY3ARK3Df3+FfvV4ZAWSkCM0egxH3mhqQcKgJFoAgsn0CJ+/IZloUiUASKwMwRKHGfuSFZ3KHKLQJFoAjsC4ES932hVGWKQBEoAuuMQIn7OhuwcrcIFIEisC8Epov7vtSuMkWgCBSBIjCTBErcZ3JYyqkiUASKwPIIlLgvj1/VLgJFYDqByllDAiXuawi/mi4CRaAIrBaBEvfVIlt2i0ARKAJrSKDEfQ3hV9MrR6AsFYEi8FACJe4P5VF3RaAIFIENQaDEfUMMY3WiCBSBIvBQAiXuD+Xx6HdVoggUgSKwDgiUuK+DQSoXi0ARKAJLJVDivlRiVb4IFIEisDwCB6R2ifsBwVyNFIEiUAQOLIES9wPLu1orAkWgCBwQAiXuBwRzNVIE1oZAtbp5CZS4b96xr54XgSKwgQmUuG/gwa2uFYEisHkJlLhv3rFf2Z6XtSJQBGaKQIn7TA1HOVMEikARWBkCJe4rw7GsFIEiUARmisA6FPeZ4lfOFIEiUARmkkCJ+0wOSzlVBIpAEVgegRL35fGr2kWgCKxDApvB5RL3zTDK1cciUAQ2HYES90035NXhIlAENgOBEvfNMMrVx7UjUC0XgTUiUOK+RuCr2SJQBIrAahIocV9NumW7CBSBIrBGBErc1wj8yjdbFotAESgCDxAocX+ARcWKQBEoAhuGQIn7hhnK6kgRKAJF4AEC+yPuD9SuWBEoAkWgCMwkgRL3mRyWcqoIFIEisDwCJe7L41e1i0AR2B8CVWfVCZS4rzriaqAIFIEicOAJlLgfeObVYhEoAkVg1QmUuK864mpgbQlU60VgcxIocd+c4169LgJFYIMTKHHf4ANc3SsCRWBzEihxX7lxL0tFoAgUgZkhUOI+M0NRjhSBIlAEVo5AifvKsSxLRaAIFIHlEVjB2iXuKwizTBWBIlAEZoVAifusjET5UQSKQBFYQQIl7isIs0wVgfVDoDzd6ARK3Df6CFf/ikAR2JQEStw35bBXp4tAEdjoBErcN/oIr33/yoMiUATWgECJ+xpAryaLQBEoAqtNoMR9tQmX/SJQBIrAGhDYUOK+BvyqySJQBIrATBIocZ/JYSmnikARKALLI1Divjx+VbsIFIENRWDjdKbEfeOMZfWkCBSBInA/gRL3+1FUpAgUgSKwcQiUuG+csayerC8C5W0RWFUCJe6rireMF4EiUATWhkCJ+9pwr1aLQBEoAqtKoMR9VfHOhvHyoggUgc1HoMR984159bgIFIFNQKDEfRMMcnWxCBSBzUdgZcV98/GrHheBIlAEZpJAiftMDks5VQSKQBFYHoES9+Xxq9pFoAisLIGytkIEStxXCGSZKQJFoAjMEoES91kajfKlCBSBIrBCBErcVwhkmVl/BMrjIrCRCZS4b+TRrb4VgSKwaQmUuG/aoa+OF4EisJEJlLgfiNGtNopAESgCB5hAifsBBl7NFYEiUAQOBIES9wNBudooAkWgCCyPwJJrl7gvGVlVKAJFoAjMPoES99kfo/KwCBSBIrBkAiXuS0ZWFYrAxiZQvdsYBErcN8Y4Vi+KQBEoAg8hUOL+EBx1UwSKQBHYGARK3DfGOK7PXpTXRaAIrBqBEvdVQ1uGi0ARKAJrR6DEfe3YV8tFoAgUgVUjsEnEfdX4leEiUASKwEwSKHGfyWEpp4pAESgCyyNQ4r48flW7CBSBTUJgvXWzxH29jVj5WwSKQBHYBwIl7vsAqYoUgSJQBNYbgRL39TZi5e/GJ1A9LAIrQKDEfQUglokiUASKwKwRKHGftREpf4pAESgCK0CgxH0FIK5fE+V5ESgCG5VAiftGHdnqVxEoApuaQIn7ph7+6nwRKAIblcCBEveNyq/6VQSKQBGYSQIl7jM5LOVUESgCRWB5BErcl8evaheBInCgCFQ7SyJQ4r4kXFW4CBSBIrA+CJS4r49xKi+LQBEoAksiUOK+JFxVeHMQqF4WgfVPoMR9/Y9h9aAIFIEi8AgCJe6PQFIJRaAIFIH1T6DEfW3HsFovAkWgCKwKgRL3VcFaRotAESgCa0ugxH1t+VfrRaAIFIHlEZhSu8R9CphKLgJFoAisZwIl7ut59Mr3IlAEisAUAiXuU8BUchEoAg8nUPfriUCJ+3oarfK1CBSBIrCPBErc9xFUFSsCRaAIrCcCJe7rabQ2j6/V0yJQBJZJoMR9mQCrehEoAkVgFgmUuM/iqJRPRaAIFIFlEtj04r5MflW9CBSBIjCTBErcZ3JYyqkiUASKwPIIlLgvj1/VLgJFYNMTmE0AJe6zOS7lVREoAkVgWQRK3JeFryoXgSJQBGaTQIn7bI5LeVUEFiJQaUVgnwmUuO8zqipYBIpAEVg/BErc189YladFoAgUgX0mUOK+z6g2V8HqbREoAuubQIn7+h6/8r4IFIEisCCBEvcFsVRiESgCRWB9E1h7cV/f/Mr7IlAEisBMEihxn8lhKaeKQBEoAssjUOK+PH5VuwgUgbUnUB4sQKDEfQEolVQEikARWO8EStzX+wiW/0WgCBSBBQiUuC8ApZKKwDQClV4E1guBEvf1MlLlZxEoAkVgCQRK3JcAq4oWgSJQBNYLgRL3WR2p8qsIFIEisAwCJe7LgFdVi0ARKAKzSqDEfVZHpvwqAkWgCCyDgEvLqF1Vi0ARKAJFYCYJ1M59JoelnCoCRaAILI9Aifvy+FXtIlAEJBWE2SNQ4j57Y1IeFYEiUASWTaDEfdkIy0ARKAJFYPYIlLjP3piUR4sRqLwiUAT2iUCJ+z5hqkJFoAgUgfVFoMR9fY1XeVsElkUg7q99/FPtzr/e13DOG+6vV5H1QqDEfepIVUYRKAJFYP0SKHFfv2NXnheBIlAEphIocZ+KpjKKQBEoAssjsJa1S9zXkn61XQSKQBFYJQIl7qsEtswWgSJQBNaSQIn7WtKvtovAShEoO0XgYQRK3B8GpG6LQBEoAhuBQIn7RhjF6kMR2CQELLqQLD+mQL6a1JobZ+XRdPgTM74ni6Rm6sRhWT7rqWuaJ2HDB+hs+D5WB1eUQBkrAmtHoFkfHr3CWh9Iutys6/o+NJKHtj02PvFpe/vFkywKKVN7ItHGpmYeLXZ3+ra168GBa7nE/cCxrpaKQBFYJgEEXH0qej8KCzR+HIF2Dzp28KF25U4/eKtOerGd8S/G5hSQDSc28taxh+fRYJ03TCzTj/VQfYCyHhwtH4tAESgC4dYpWtd383NmphgZCWqx7TF25VXafjQvXsKkX/y1uZNfIOsi8i4MYQeeNxS/R+83he7NcicZjApFoAgUgQcRaOj0yMdz7N77SMlmGx7bHutXfELbvx+Rp6iJNzDSRe+xU14w7N7lbTSk84JelJfzCCBhg4cS9w0+wNW9IrChCBjC3cJ3o9EIt1mvrY/1y6/V9u3ZTQ9Ta80VCsKFF+uUl5A+9rHxqp7nAjdumUdko4cS940+wtW/IrCxCBhHuPNyxVrb+g/88ut09DEyG4v9uDeZu5qFpZS3uPDd7ade6HnPxylhvNnR8OdnNhaWR/amxP2RTCqlCBSBGSXQvFPrxYuV2LtnP3pH8B6maST26jL+C+ecWp8R+Vsu9tNeYsZWXmaWHeNBkJcN/ilx3+ADXN0rAuuRAFtsDS9SQqP8ORTdNjbl5i3GiBa/lMp5q557dskQdhJJMeJ5byKpG27yvbze+u52Ku9nXDwSpBbka8MfvuF7WB0sAgeEQDWykgTMEWA23y7brR6ZNuNH0SDRvO+s7/3tF9uJP5ZCnc22PC388aZe3vz8X/Htx1AkxL6+EdnwwTd8D6uDRaAIrDsC1kbNZeHe3Lyf15j9O71o1nvX2jveEye90NiZB5txdvlO1oIhQq78S63jQ7bpA1dpx/eZmkhbsPTGSpwKZWN1s3pTBIrAeiLAdtvMQn3Y2GI0F52bsU9XjOKiS/zkn7J8S6OwZpRC3qd0zqwpkHNe1Ye2Hmof+LgOP2JK2Y2WXOK+/ka0PC4CG56AhfO7qTkb8y1jH7btzWSdv+037OQXEhF7djWKJQrL08KfcF7ldGz8c5uv+MP/aHd9deGSGy61xH3DDWl1qAhsAAI27vLXT0O3Ld+tcB3rwnfrtBfROXbjSDYRQmSMNy1EFwihnpqKkSPuOz/UX/DKsfULlNuISb4RO1V9KgJFYH0TsPzzMKPR8Gdj3Lawi+9f8fN2yovyBUzIZCb1avxnRnS6jlk3HkjENR8dn//akcw1NtmQtsFP06FI2uB9r+4VgSIwuwRaFwj4SPMRfXfqGd0Fv4qvE1WenLv8445T9+wUJlhQqMXOD9sF53bRWnTGW3thmcwNHkrcN/gAV/eKwCwTsMk7lxA/jeInomvqQo6g89K9GXv3zk95gS565wO7bdODjgcUrGFEnIZMDHHlHGq336G3/XJwSG4kkbEpwgNoNkV3q5NFoAgcWAKLt8ZW2tu8eAkTKbtmNvzDL99Eh6N1pvGg7Jeg9Zk93Ra1qWrhJmVJLhQ2tTtvszN+on3t6ybyW1PP44SczRBK3DfDKFcfi8CMEvBo8i29dnfaotTlXrwTt4N63o13vU576fiid5NuQugH1dbCh1mzFr2lCfEmflLqtj+3M05qX7uvs1Go52dVhbewsDbJ39jnEveNPb7VuyIw0wSat2bznbY0rhapv8678TGfOPVF9tZ3d7ylCXG0kN2v2tw/NIScdzkuheVffSKz3X6bTn++vn5PZx6aJwVNJ+bh3kbcbvgAjQ3fx+rg5iBQvVyHBIwXKYHk5t87nU/5zj/Sbryl2X60v+03EHs22ezKw8ZODAVfrI9uQtn5SHd80V72vHbv/wrkftizo/7Oc8LGbfKn5rXx6eolCwAAEABJREFUjxL3jT/G1cMiMLMEEF8ZmtxadPnPOtpcNLMd3+9X7LT8vyyZTOgy8QjKtmkdsczIXHbu2vWNeOkpuuc+15ybkTLZs4e+1dvIMKNNcZS4b4phrk4WgdkkwG7aUPOQI7p8ovejjokPXK1DDpE1qYUh7+JjbOe1iF5RmMeA7N57dcbzxJnqreeR4DLl4WH5xifanPJxkkkb++Mbu3ur07uyWgSKwMoQaIrwb4V3rTU18x3fHx/aqYMPxnrIFR75UoW7xmci0kQeGVoMhe+9pz/9ufrinxq3Zm2QtwgbnhPKRLl1jTYfaWHjpQy933jdqh4VgSIwawT27pcRWd6TTLzzGEfMqZl1su3fpyuussdsk1KXjBJGjAyJK6c9IYU+o/mCpfVCrIWSxzd2+cue77fe3vgFlW27div2/HD64BY3ibLDJyFyqVAEikARWEUCZtGjNm2PrEe+DKe5xktwDWp85NHxgWtj2yEotmmvfFPiYYHs8JRz0k1s7Tt0Hym/7z578cnttj+Th7tb660d5KIE5WYyrL5TvvpNVAtFoAhsegK8HPH53twC4Sag32EciLW8bT003n6JHbw1ZR1BzsSFiQUljFNoUobCLXTvffbS09odf2Hs/1u0GEo4LfULW9kcqSXum2Ocq5dFYK0JIMldjE0HNcvX3xZqkfobW7falR+z7cdQoIWnmzacM7bAx4NvAVkgYtBujzjvNXHbn/EyRjE/lnn+u4+8gg9boPYmSkpGm6i71dUisOkIzESHjZclbWQxaurZfMtQ+Q7x7Q491K+4zo76PjbiyL2byCU+zWlyyQoFym1m6Htc8Fpd/3EiNBEazVGix0wXxg4+vyJQfnOGEvfNOe7V6yJwQAk0Hzdrkz07DZvmenbthx4Sl1+rHcdEKv6gRQ1h59UNRaaHtIOup8DbBa+xqz4kmzMfqfUyfp41d++122PO22BzuqWNnbOpO7+xh7Z6VwRmh4AFv3KG+OVz2LP3MfbHHhyXX2coO7t13pWHkHiZpc/DKSMLfJAs70g3xQWvbtd8jB26oo/4ljQyZU6v4V+qabubuTbxsak7v4nHfVW6XkaLwCIEeJPi6kIeCn/soXH57/qROyifSh4adL9T3qDymnZQMLO4nH+urv1gxjURsW+TWQQZXBH+vvnc8PJ9KLIpTxMum7Lry+s0k8j4Xslv/hJ7B8stQ8uIkZPTi8sQbaIAn0nI34vGxnnHMTr+qTr+6e3oY+yIJwyFG2eCwsPGeR4qZoqahSyst5ZNqKPpSQSrRHK9EFuJYKyQoV36oHDueEWaTUwzHvxyhcPzprk9xfB/WuFKnwECkT60nIRDRJOfJTM+9ZN7ajUmn9SCdyvKWb1gaeYPM4cmDAkftJb5MymZ06MFU0qc3nKJH7VDvtdOarrnaSg6RMhqwhB2aDVjfHhTnyXyPfvVHzLsaHeI1zjUbZHvdjKX9DAZrnLJhE36KXHfz4E3KfLneWf6WajZvNmWPucvE6rr+dZp3Kkd8u0ouJ9znv3mv7crPxFfutvu+N9x59123afjimt1xTXdzuvjU7fYnV/Vl/7G7rjbr/tjfeAj/spftmc927f+Q1qgIfEzlHkz6/hJqm0ZW9CGtRGtmMyHvwOyn914RLUW4Xf+NcFu+5/2pa/qjrtHd/y13/43dudfLxy+9FU793VSp5b/8B6PH9PYzB5huBJmgoA35dh4hKypD3nwAH8U15oxvnKXGe9P0FK5phwRrIFw/qMMFyq0UUisEQsf2yiit4vermf/aAx+aOrhg2/DyiImbPBAyr+UFJf/dlx9ZWNTQRMaRTcfbIam2tm8GVMHaaaRzIBzltNVzsJgNmuuadTa/Jyxdpi+0T3rJ3TBW+0zt3S33G6XX6NzXqsTn6tjj3NqUVONHhA3Lg0bw5Xpy8rZsd2O+6H+Vefossv1hT+1a/7YfvHX2pOeJDXTWKxH2z1SL3nvrXM1akWqKpZWJNgeK00ZaxIrc3H7lJE3H3dubdSZJZTGUlQdM0ggXOLTGCcuxoTK3yWnOzoMpIdRqjcPngdSy+u0KjEUtjHz02KoNZTHAjU6DFz0Hp16ej4DyCVpWhgaZm55zDUMMcWUSXHNR/XmN7n1jTfsmcCayJk6zcxmTmeoN3P397/voXmLUYtAm5mpXYzNLA47vPuFX7XP365L3xcv/9k4/AjxU48xRRtaOZnfvFkRIq7JVFVMRiBYOJM5mnJtlBZa3sXRR+mMn9W1n/RPf8HOfYO2bcPj+WFVODO7OVMbs0RJX5lgxhMj3TLsOV4a70kzrmlHPt3cIubpg/qOl51t0fLT7FT6ASHQshWmLvsQOf/ZMBszcaFPy9kgC6Z5xzxPSWXqmi9UNtPYt0vN/Ntynju7dA8bc2/IOu9J3v4bdspLFDLrIyfJ4EzWe+QnJ1EnUcyJRnradn5Y559jbQvzs2uc+BJLOjsKCj7SwmZPmTpImx3Mo/W/t5Fs7EzTmBcT+YSn2xXXGBJ8+s/EtoOZvCFeUbisM6ZfuIYjOHtO6jG5atzljdTMlP81CrA8nBuJBgz5DsS11xFH6Ow32ue/ZBe+d+6wJ5hk4dRCfUMjbrVSRzP8VT6QcEusTC164LAZqz7mhm/csrHxpSK/xS9arTLXioB1wb7Ew7/+dd382bj5c/3NnyOiW25YMHQ33aCb/qTd9T/MbDLWk8tU93PmIOq517HxHHM4TG7Wq7O3X+ynvKAJM3xy0tredaFHHDF5fuSCaHIeC007P2ZvfA2Tctztls2ZxqauGV8Ocvpp6ceGr+Ebvoer1MFRaxITdRSHf0988Jq4fCfv1pnHKLos9xGubjJ1g2KD+nLKhRHpEW8KQ075vJE6LiFSLOsMg2IktbwjYt1YPfdi+3PqC/RHX4iL3mNPOAxrLTofDGbuSnzMaWgs1hP++LjXiLhNt5wO85gZ3LPgHY5749UqRqbXqZw1JBBh+UfCbf72W+Olz7eXnmIvO0UvPTmmhPEZp+r05/u1H0FBzaybx3VfZD4w+pSQNQqHM5EkZkVE9/b36OQXqqHZTNswvtEKeZ46Tyg02DHayqY//rH2xnNl+W+BjVh2bKcyo8/pRzkPThUeRmDQkYel1e2+EWjbDolf/lX7zOf8KU/vkEKWjdSlHrcwTLTJBM0oM5wEgqlxZioy+zkTb1wyTcaKIK4YhJIcgvEZwmii/ywNbkN2you08zP2KjYyakb1YRVpBY4xfkzes1szIQNi16RFDhM9diS9jSO/gKuJ1Xy/44vUrKy1IRCMVNfPMZdsHDzFMzDrFg4efEHsx2SGI7I868Na3k7xvWE2C7IeUN6Dxu1brt5+4c06BWV3eWS9VOzOYjyZ1ZnyyA/yTaI1UefjV9l5rzLmGTOTdGvWN7MtueC4Fb8LG2UrPIxAifvDgOzrbRz/Q93H/1hnvEK8n1Fu482GbYihjm7MYRaDYW3Mh5BRJrya53Qk2ymHcMop68osESdxkkEJau05x+RKJmlZ1pDQbduCFzWf+YId94NizWXOCnwcyyGLuWBRydOi01pkZOFPs2CxmWxOMRrJOFq0hctuztQZ67XxzbLvGpLIvHKmaWs2MmnBIN6ztZEHuWMKtGB4jb2zphymsZrxsDfe/9j8yP6eTnlxnPkzoXHDSgr0UJNVYKMhNu3kTLvM473QG86mXTwJCR/M5vi+2tq3OEuktOFrtOp4GIFh9T4sbXPeGtPmgZ6b5a1ZnqUm5lOEmfVG3Ozs8+zKq3XY4aYJQPcs+KDJyq0x7aSUXeeSIVOIO3byVhTglnPGTPcfexPlk8T7y1OC+c05Q8aaHX4EnuBP3oXz6MgI2eye2qQ2N0sIxvKjnqVXdn+9PY7cf//gSHobRmMswJabOzLtgarcVZg5AoxXuKHyDJhpj4wu5OUwHxhcBVtyZUlqhGn6wXxo0WxMWak/7WRd9B4Km0bsYmRtiHOimJSTtXHOa34mKeS24CEh1623tbPONLUMIVwmDweUi7FzSnHPLmTwLaP1eRCBAfGD7jdvNHJyme2ZtjmBmGlDoqyz9i0zNhsxOvixdvlVOvfVaweKiT44mSdX9Pl94dxX28evt62HdH3PksU3nkLeMfdrfIFR4cARGJaJhbGbHtvJL+redilryFhbIbKEEA++sL7Q6+Eh4cMZhe9jyOIUch4GqexnnKJ7v2bWSU2Omudkp0CFfSFQi/8hlBqTTsyzDDJjKjLPRIp5MDEPO0wf2Nl4DRJrxs3wyXAo/Rm2QV0XzHjX9mP0x7f0x3wfPWAthXfROstfR1VHEThgBNizeyfnJ6JDHqtf/FWWD5ui3LCzlceJEJOXq8kiWGBE1atnxsq64cyOZChz61+0M07ye//W+D6ac3qyNLN8ffaRgO9juc1WzOhwhJhRqGj0JvOjn6Tr/ii2b3em6SCrFDnwASE3vrHiEG17U0i83BTbebWtB9uV1+W/asA6aWE+z0pTHUXgQBLoemZdaL6/7z69jH33vei7cjM0Yj3p/oXDBDZLv1qMeMmiYCOPqA+Fe91+azuDul+L4Oun8aiwtmXIetCbz6xcn8UIlLgvQIdJZyEzru4tzLrx0Ufr8mu07RBrvAlZyxnW4W/rkHgFMX4OExFj8TT3MB18sF1+TTv1NPEbU3SZTqkKReCAEWi5bHp+LG274/Y/1StP36vpQ4bUszUZnMn5S8RZZSMzFtwwk9Xsjjvay062XV9zdZTp0PYWbTTvMZaTQJ0K+0RgP8V9n2yvq0JMr4m/zLWcaMw2vgxKxPsdR48uvxZlF1MTYMEEJbo2IZeK42Pj2wQe4J7YDRG8NV60y2Tub7ukP+lFpezwqXCACZjCkGLOmpNGcdMNfsFr04dgV8Q34eGdjZqCmUpyGz4hNUO5TbrvG/q5M7XrHnEbvWzMKuzn5r3vuOFXL9WxzwR8n0tu8ILMoQd6mH88MVoEb611+BH+getQ9mEC9h2FTM5/WpvDTE244XxfZUmESeExkXy26oNToegu/A07Znsg+kNKnYrAgSHQLIK52Zpb34Kfqqxd84H2plczFVlBg9xw8om0R9iQyDTlKrv36+OXnBx//d/YoFs04+3i8FcmujGqHrzGb8z2A9ONDdGKb4herEAnzHLiMBnF9mIQyxj56Nv+vv7NFfH3tw4bjbFHF7mbWMs5FsGDBTckVg8fKVga1kmtEUHXJTMLVP/y62LH96mOInAACVju0IMp2DdnjxTcc3f1R+P81+RXzPSk5YmXM0Epy70Kc5mVde+9eunzu9v/jKkb3vUdk7xnViP/3HaUbazObqhbp30iUOK+F1NjJg1zyRSShfPWWr91hbYfnW9BTNJIJksZdW7yi6UUbKPVhmdB3lCRFM4UyDM5WWBP1pCYM5syQ5zTkMUDY1JMwwsfahKGTGxPrpxjSGQ1EJ+cJzPdBomXvAtvFqa02VNi29/3y66MbYdQL6z1Jv4jruwChdYmNInHT4MAABAASURBVKUjMfzt88Z39IkXkUgH99zMMi0ygtsZzw6l85pkWWeWZbIvZFseQxy2jTLECZnDMII0yzJSJBAYN9deC9wvEmidYBy5i8QKdNv08m0oxYvhyUBRWFSX2sQZBe8lnJcNEwvD83dPFi1Y4DgnMhsxag1Pao/7K5CzYDDrrQ0WaHGPQUVWtKBC45PXnGCZS5zCeQ7aoVMKEVxZQFQht+2Z0FRtxoY5s9IOWVIWphhlZF1vCDjtkpjjSu4kYJeMSTxnZIRd8+GJvu+1PRpym6gdoft2tdNP0m1/rhhZOj/v6SxeuazxgytGsBk2LNKhZp0elYA/aolNUiDYFjCNrPOcxsop9aa36dina8rhMuWyYMq5EadWXmTBLXXGIjejLjXySSLFghVOlEQxZcXKN8n4KI8QGShCY+ed91Juz6WgbNxfapLz8DPNUVw2SWfbgzE7/B/6e3/HA694/Rlji8yOeeHSpNwBP3c26vHMR7LWjXt5r3BzXBKL2AASvYXIRT6ssdRlZs08fJxf9DuR21pD9JrlOcWiRfaLJJO1yfqHM/0mvXXQE782i15HGHYU803zhqGAN+kLhDDMj7wNdszHwusR28kFig5JoZHTSCBOOerN5xg7GpMN/8RVi56mbNx64SM1WnQec7gbSlnE0b41j0Z5BltycWMU5vtiw3OqLBh68Y5uDiB9Z2P2yhIGzXtqhzHgo5YOyIzXeECUW1AYNL319JHCbqS3UKJu5upbl662xKMRZXgaE2QDWsOncVja4b6LFmwqRM9FnCqactCQrvlwy/07A5KFMBKim9bu2xUvOcVv/2IzhY/NLLPrs2wCDOOybWwUA67O+rFsjgUdz/pRnfnPF+lZiPUQZsaszXUASGIIlPgQG5k1qjNPgxmsLNI+f6MufWc7/RSd/rz2A0fZ9ifqe/9hf9Tj7KQfjdNP1Rmn6L1vt5tuZG07hqPvNUbvcikYK4uGkLsemwsHE0ohUTtkw39hYxbncU+NV/yseHfJpx9RQPJIl4boAT/Rh45dWbA9m2sITusse2by3iLdC1Y4r1itMRyycb/t0DjhqaMTn21nna9Xne8XX64rP2gf3mnv3zl6+7+xn7/Af/FX+ledZ+e8Lp75XDvun4U5gyI16nI2zUnKR6SbhPjx7HYFQuaMtLqpPE0dFiJr7jZD4lA8c7QZywuFZoI/zoseKbzNB4eG4dCodZki411D5mHOgjweac0tur7vzWmAB44iXbKjnxTHP2103NPskEOapcOacoxSVMeO6b7zEFaNpvoRSYotTIGuzctwTq4OUwFeWnbrtKU95rF+wgn9cU/V8U/1E57Wjj/Bjj+2Pe0HdezT4vAnUhLf1Kxro1FzemO4GAxToxUxi0wcvcI8nxOSh5GwcDBhovk1V7OFJ04nOU+K2xkn644v8qzxtNvUwsIXtlKpSyFQEPfQYhkwqYTuqO+PeIIuukRso3K27SnwsAvz0owTC4WZmOVYWb2c+W3itgWriTpEr/+9dvYr4qhv18t+sr/4nXbLDXbjTfZ3Xxtrd7ODRjGO2/5MN90QN/6JLn43X07bcdvj/LN0yy3OZpB5bk15NBozdZp+NFFEhhRRxsR/I1q3zi74Ne04RvLx6JvDmkfjyKDQGgQ3azCiZb5AhJvYhHeZ0B8kHkZGgtmOJ/lZb9QV18T/81/1hTv0vmt02eXtnNfpnNf2z/5RHfsj9uSn6finxfNO1ateo5f9y+7s18Y5r8//19Xl1+jOr9r1X/DfvMLO/Jc6/P8KMSZ9gDHocmOMnCtIbQ4XrDfOCwZrZI5ELb5k9HPIXOhbQ0mWzALBGc0Ij45e9NnEYF+Mwlgc4bIukLRR7rK9OWmcTAfR/2beWd9OfO7cL7zFPv4p3fnX2vlJXbFTV1wdRx7TrDGtKL9waD1tSk4xk+hd8NjqvtVhXeIREh2dDrUQ4I84zM74me4dl9mnbtHtd3Wwvfy67vJrdeXOuPxqu/Jau/zjAcMrdnaf/oLuvEvXfVrvfFf76Z/WE77bqd/GZl0LNL5T8DSWZa+wPbnmvNeUw6wL4wvaN9v5r8p/vLcJC1nh/Ff7F2+XWTN85zG2JbyTyJ5iqJL3mYDvc8kNXtA11yME2sJ6t7df7FsPkSlM044gjyVDEQskICQz6xorICcmuVn12o/omU+Jnz/D/uAPFVusjToTqzissQXsQkZZ44oB9m5CiZjgds99ce1V8dJT9IxjY+cHTcx4DYfT5hBZ6BSUs8xIsxgcLkMCzVj++x7N25a56FlErV+7cW/oXCez5nLDPzeNDQg2tiO+O970q/ZHfxbXfUbnvkHHH2cHb+vUTEa/fDh3xPKuiXTLxy/mclMZzjhMMuMJh8eJz9Ev/Ip95hb79H+xV/6iHfbEkAZ6zTi4aYPo0Th1Fgqp09ECr/pxQy5hH1sWKrgnzYevCDkVJPdRRK/00CQco5nGzEC1ou3ujH0wt2ML12GH+yv+pf/m+3Xb/+u/+Ts68xXtqPy/bmWtpjy8G7U5hjPjC37MgvlkzSa5Ht7kjT07KcTyiZJgX/Gz9olPdp/+Qlzw5jj5+cH2Bb8GJ8ESEvSMIZEAnqSDlBE/ONnzXuwXvEWfvjn+6CZ/1ev1XU80M7rWe2Nfko5F9m4yBJ5ZWvCggILnZIeD8caz/bqP0Er/pnPaVR/mm4ssvTUjdxziq0aO84J2KnHfCfi+F93gJXve7zpTsDvphf7kp4tlyrLUZIUt0HUzo4yLia5gd0yRJrnk6nqPL3yuR5rPO3d8111mRqYNX12Rb3Wez49MbEYrDcFvnpt0D0luMrbXnFt/93+3N742fvKZuuU/S5ie6gz1sMQ5gw2ntI/3QRMsxdixI878OeItuvmQdy0LrcUnrAEBztl463t007r+sCf4Ze9rn77Bz/xZO+y7NOlMQ35QDzouBIheZJXsU14jgWQBumtmjANlCOMs20xU5CQd8V3t3FcFKn/ltf7M55nmrO1WQm5iHHKPndYW+ATGGOKRGyF4T51Gj/9nOv7pC4Z23NP9OLKemjrV5h2XRN+iN57jvZk5z9YIGeIZNNeO/0H7wHX2mVv0pn8dJ/4ogy66xjQwodaCAM90yu/pIjUWDg2LaY9aMks/w+dw1RB5U2rxOy6JT98YfHvjsUFJo18t28p410ShwXK2NZY1KVdBJhvpjYjhjGSHfbed/UZ95ib95vuCV0athdGQm4hQqjHvW26PtPCBcz42vmdMmjjvbD3vRLv6ozGSMWa5FPjW/E2mJp3YMz0WNlSp+0ogV86+lt3Y5VhLbXccerD98luZ/vSVOS1N5xN7MiPMKN00lB3HfV/XRf8qXnxKd/eXg6kazaxD0dTM1Ym5zE6ndUNpJxq+2zTXvGddsSCponDkz7IalUK339qfcZreeoHu/YZp+mF2/5Jowrk8eVhGI3vh57xRh2w1sQ/0zJtuaVVz8Ehm9Nybh0ajx3y7nf+rHRr3zB83+Eiik5ZrPb22NtzqgSNTucsecYHSpNecqUfKaHhJQStkcTv0tJFlxz6tXfbv9JkvtGc/tzcxIj0lebBSaEpo0RyXIt/q+ORV1uUfsyuuWTD4FVfrymt4l+J3/I2+9De67S6786v8xih5R3fbXJhsGFkd9kS/4uPdFdfqKccqaNtx1cQrNIC0EF3uSDU1hhS1NMvHMSkLBlPasABnUwvzLeKBojFPNX/He/THN9rJP0WuU04NC4Z2i7sEmE3EkJhumIIvHBlTNixhLgsTARjFmsg082f+uK64Slde27b/E9M4KNPMZK1nCaVZKiwQIrDfOoM8gXjc+UWTunGLbmTDsJp1PF6IExawUElLJDB9MJZoaL0Xb+pYGH7Gz8TBB5tYJY/SIdbqUKLlxG5SguTt+V/aS06N//BbHfM8woeV0yKY+ZRvNk9E8U1yWRUWyu0lKwoJi5Grk7FUhjJiF0M1N9qw5s30/t/uX3aKbv8iCQsGfJYZGqfAF+qlQzLlqrGxoZbbttkZrzTrWoyNtrQ2h+EQPRsI9086Mv+5nle8XKCwJhFE3IYe0AcJAi0zUQYqKg9IcjE+5ITMqBmch4pSZlCLu7TmwTd9wCpMjlIe/ni77PLu/R+3rYeOGhLYa8oRonzk4R3aJoYAjGZTimdyCLAZUYC9CwzIaaVnGvC9TbjW7Myf1Sc+FccdTxnZxDJuNW4xbcLzHDi8lTwtMKQyt6l+0hKb+8gKTTwhAsebnXOePvHH8bwXDUY0OXqxSaYdpkImpMKKmdUN+FDmpGl8scB5ZY/VcEbGgJAoF8HEfURvjMVxP9hd9/v6xbcEOwY8bZ27uGrqMaaWqePc0tRYfYcPQSORc36yWLoGaQzRkjbtsVIdZ8xWytS6sRPMV8nMmFvGDVOSKRayxx+ul/8sKSFmHCWY7pp27J193qkJKabc7X+p038ybv8LFDxysWk4iZIWyXlyDptDMiSf5FIvJR6xiyCRMgQSHf/yQmLj2nhFfOcX9eLnxR23irQsn+8UWt4Mp8HnrGQUH8IQMUqy5kVvpVf8dGzdSst8ex9KrOIpfcS8BxGQ9oamzAlnLLsztpE968f4+U78xIfoUDL9T0oa3M6EPR/PBJPZcG+y4ZoncoYbn6QN8UwfPiYXB4kEIrStDlo4E8c/xT71hdj+pE4pr+mhEJ09w93SZ0wr2HHjbYB+qJ8GfRJb8GzZkWEs9rTYTJ3cOCLMth2id1xsb/o1bdsm+cTlThnt9t5yhzOKnilBfHJmllI9b6EnlFyMZRYTHibMFia++QHYxnrC4XbdfxY/Lx+8zUwcJtcQybZEdM+tkS78E1findJRcZh8SOai4bDhfP/J0HqSkozsjJ/1667P91Q03YwOM7smJc0opD1+ZhKPFt6/ZEKXJ2eZ2LAuNLQU5llqsJEE8qY+yyIwAF2WhXVWmXllHOKVIUumE4ulb60jqW+veaO2HhrDtiX1l5kXFJ/aQbYwynzPKrff3l76k9q1a2rpJWakA6zeZsJFvJNs3Mbf/Du95FTd+WdDYsfra5eJbwiDH1rwCDfS+SZhTVsPtjN/Xmpm6TfJqxhwzljuI1qT8V2F67xpDoeb+tGzT9Sl7+v41VrIU6rTKnoymAaCiW4HwDLhkG328U/F8SeMwhi/xpeqTHUeQug9tPJuyZ/WaMKymrU8h3ijItdY27balTt10gvFHV1GvjN/gY+RZjkducpyoLAUYoBx05mtDclPn9lQIIeU7KkCaPMt9szn+tWf0o7tQRNZfxU/IXb9w/I47In2/qv1qjfB0Wi3AdlpuGVmy8RwTXCQWuEAEvAD2NZMNJXrNsKQm2isDzSUFeStb4d+u57xE6yhXE+sJVYM/trkQuzhISuqE/lI061/2Z9+st33jYcXWsa9Gab31qcJmZvx5d7u+9v2ktPyRTyZg6/NetmDCpP+oBBDDqvOkJXm8Yqf1sH/QLz61yof4d6PWux293l0n6YUAAAQAElEQVT7psFKHtbQpm7HP9WFl+Fzatbg3+CjVvcIJYQBlCE3yJDJ33t5f/TRwbcvqfFlQuMRUmk2BqmWeATl3TUZEgHbmol3bvT40O/wK3fG9qNllBGyaElDCx5pJj9kUl+9xag5NzjIBGitwRMfmxFB5vsWMrNOc3HGT+s3/4MOPWSYmUONRz0tpwDdCDMpoKVufPa5eu8VccihSLupQSHP4UQp6MGXtuU0VnX3h8Bk3uxPzXVaJ1IkjQWAyignJ6dOan7GK3zrwSwXsS6Zjwo6aHymBebvUFp33tbOOMl2/W/jCeGL1ZhmacF0PJyk40dgNR9I6S5X8ZvtS07tdn1N1ijj6sgnsmAgK+7fJ5r6g7fas39yUnHB8iuVaPAxUOJiP6cRcBzFxPutj21XXtVvfcykUw0xoJRW/wDEnoYaTQdPGtp8zFZ/23utzVs0xEgU6DzUd21E5tKCaZgyEhFnZkS4mcZ+yLeLje327Zoc2ZayjBY+0g1LS4x7E2+EDG8ZL1NjSpjx62rjd89emSwh9Xwx6Oxt7/I3vXli0WQ9HZncrNrZpBj+syTJZqHTs57tl++MQ/+BxFcVk3VjNvdtZD6/94sRORUOHIHNJ+4RLBNmnstC+afL1TexPTr5xbnk3BTkMAB8Q2fyElk4mChucd+9cd7Zds+93jsLka8CWoWDdc5SZm2LjRA6xOUb/7udnX+B1vKPKzS16a0GfnZkh8TGeRSdvfxfECFlVUOop5Uwd8PjDv/Vut6aXfgbvvWQTrxgkJl1vFNKz1bVlzSeoz4Q5MZCw/ABRLZjh17xSskHjfKAEr52PcWWFCa2G6qe1ZplC0j7KC58h3Yco3DDMlk+N7ZGK0SnBF7578l32fwh26hL6M2NZLPOmMHRyXJXL+aytXf+epzKb6d8R8DtJht3U0yvZLK1ZqwcTO7pbBLecYy9/xo7ZGsnsxZdeD/q00U8p2CFA0vAD2xzs9GasT4izF2Ii6LzePYz/fAn4FxOQlYhYhnqNGwrSV0wUNTG8cZXxW38gjoONmstay5YdvmJtMZ6kbNkbMRuiPZu/KwueWewKUaWfGoLKNUgOCkuJh/z8DrqKN/x/Vrlw/v0KfAXLIacOf77M39Cz8p3X0N3UMIUCMOlVSS3p58Wbhz5JQZPJDzAKWaC1M557cRPvGgxNnfrie6puI8XEw8u+mzYU9AE3W6js96gZz0XdRuMTKZT6+RG60PSI0/k4CYFTE7FuR1HaTi6UDoZXFwxohl185Lb299tJ/+UiUF2F1dKL/1rB5WWGoKXWSNnCcRomGPZtoH36KN0+XU6mN+ucHKcKcxP+VLNV/nlE9iU0E3DohYbj8aSb+HPep6Mn/LhOeaTwTh5zlquU0L71Ke6T/6utz5y7jblJJ5SdH+T8c6kSVAEjxtWfhOrmsQ2vvTXddfdQboWPRCTSSEeBWmi08kvXLTCCmSibzjv8JWaBxbz/fsvvkUhqNIjAc2Gz5Cp1T54hEQf1gkH1MC3Z7gifOtWO/V011yvAC+cm2nJB/YxmsaDq7Ae1p/7asMQe/HhkunhpjEPApIXDMh6pmMtJLNoo96bhgPfvBmWgg8220H+in9uJ5+m3KKMzdRnMadzVM3oan7SB/yKkYz/pOy4C7wM6Y4ddtl/kO0O7wz/F3truJoubnrbvtkIOAsLNWSLIfbmHdLcWEjPeY7yzwuyKJwlEkzQYYkY5ymA4hu7dN45uZmy/KONFiPnva0P62tKlaUlm1F+oslEzPLWzBTsKg9SOuZdyHgphAQMck+xR4aJWBgHVdhHZ9ekE37wkSVXNiWESEIEZR93PQra+bN/Mg47HGLZE7LzhZKL1zI2qMPKNv8Ia5A0BnyAYMI5AjqrBCO3Z/1os//TuSzFl5cKjSJLDR0VTC6Ghb7LlFIn2pFbah9RpSbmTPO8WegzFOA7jagf6s23dMHDsSl452fR8Y1obGrWd3rOibrgzUJes6xTvhM8xcm0P/5rKYdRmI/RLDHR6HBRDiw3xz/V3vHe1svM0u9JXp0PLAE/sM2temuP2kCTGevNWMat+bj5nB/7dL5FUtE4mJedjBsiecnVwsLKhHb/Ah1m8Pv+je26RxTj02HRA+nke3kWXYkPT6AHmUGbuBvOrvySMbKgK13c/FndfIORNy08kOdSylkW3H60Hf7dRPBZqINZRuj+sDRJX36wVMlxthhsN92xPHxdMOGGBsR8bc+IiWNI5DUEqkTJUE9ahqakDnoIE22aFNAQz+TxkJCxLJ6fLIONjJJHGG7oHI1atk5bTjyDOIa6J/64Hfy4Jrb2rdm8NyeDeuYPDMN4bwWypoSsRRY9svwQHVKwYekV9xZ4ztzb20GSScXJPGdWXgNaCcAYl3RJuINeE0Q0cz2OOMwuvGwoNHFraIjKtMs5u8klf4PlsjckTNqgXwQimZ6xPdeM5idvM3dwdbiZnLI6+YTMJW1PW8QyTO44p1eUPekF3SkvDs2P89eCiXuNHvXmol8RxNPU3r5jwnguWsvvPPn8y0ZCB/yMAwNhiWFqjJflnkDr8fD16PRyfDa+FIthy467uq6fbyccz4zUtMOaCR0Nec9QB3MxZLvujff9jjLu5j0bU348wkDwWfXQEOLwsZwd4ny29vpz7ebPI/FLCu0JhwXv66OZz1s/phvWt+YtDa7Eh5cJaX+gjVbFwY/Rc37MIDbFeGTJfPYEg2FjT6FnYbu4DbN7d2nnR+y818TLfqqd+bw48nE68vHtuKN0xgv7M0/Rpe+0mz6HYfgHutaMStyKVRqRFvJm6icLm+y4p1De2ohzT8vKeuw92XWH8pjDJaxldGkfC/rtwrGhnoVIYPCGu+jz0phL0WiRKab8WEcxcizMGy44E6zZQUxGC6at7LL36eCt3aQ25RYMzZnoGsoMXeA2y9EJ4569SMYyhQ8plheRk85YepMpeKs2ScU/UiiJ/5RdOIQ6nineyG2/9K/t8H/UaYxBBYM7N1Y/Cn5WD1xhpwKXELODDorbJjZHZj3DNs6GRIMHPIR4ug+OiW4Grlmz9anvrk13ONOo72wyYQOBe+oPTxbAwiQYXrnLIpAMgstbe/9v2X1/O8zLlNdRY+Iyo/nS7AsbWcHUGFkbefNo7H+4WvzPv4qXnbzUoBtvMu02HaR+rh+N8u+s+sjCV8pTlqyFQITB5s2e8+MtZWOqfQtUlbIu3owzKOGMECucWvbed7VnPEXnvS6u/XDc/Cdx4+fMeozbPffGjX/U3XSDLn6Hzji1PWW7Xfp2qojRwBJazI11ODHmkykLfSJdSteOeVIuaR9buBk1G6U755GOPW41No4sSPq+hya0asycwWFRG0sE6hty1susCxyl7zxeSQVbuCyL8AlvvLwyGeLCcOtb8sCGv/I1sWNH+kfvtPARas17o4JcwkI2zifUu4mMnizTkJJngVuDSe5yqmtysJOw9Ii7tINZ/LahJEkLBGw6/ntetz42LnqXaS5s3Lq+xXiEIzytFDI0njLm6pIMhsxaPm84O66RsCbB8Eed4afUwnr14ojhTGRdhRywdeXw8p1FiVmyzCpTztqmJx8rdVPtUirzmPfMRTEtQ/JrP9S3OZPc1RpprLkwH0UuvSy9eh8WW7P5QBJsjGvOM4UlMawGHNv3YIhVCIdRXm+pldkPVuUKue6sVSESc7ikGNlx/8wn62SK/TDJgNzMiLVcXCjbvffayT8yvuTtw6N0Xtg0uW2BOXv7yH9z7aDshJjGzXZ9LS7+9TjpRLHNz1adLHFEoJ1cFw5JTzSpY4ffIZqpQ/ogojz6cWc5rLjGI1zZUCbv+8fVWeuC7pkmHZRoQ0EXjVEM2qZbnEmXZBYtJIIalZhgyrueBIucZn7EE3TWG00A1iIHhU3Yl2WraFM2yo3yedC6po4JoJAYlZ70EAy5a3yEE3lLfG+toBg5zDbPXDzjbqGQFqXGI02K6O24H2yn/FRo1DFbMZsTDo8QTYzTPPTHRre6aNY83ALzwI6g+pqEoWuhvLi7ASB6Kb1dqLszneYz7d1qOBejxsixIWNOab4d8/053W1qSyGGV1lFxmSVye64I77yZdZG2LhvjP8IS0aJnJCrPglY0+iF+Oqh1DWFc+vB0sG1JQTFlvC53ukdddERXou3mCzhqTCWktECGYmYtxi5QsceJ9Y2IKfYsExnNrqaWyqLkJ121um69Q5UtY9OiFGIePTNfMQoWtuCVqACFG00IUZIuu3P41+eGWlu3mlSEEJBXFMPsnLUYttjzSyfko1L5+Hpb8fTcxykusbetD9HE5YwmXVpy3EIZ0nIqUUb996ra67uLzhHZ5zWnnJkO+o7/Mnbdcbz+tNPs7f9ctz42SxvRocs6I/pokvC4Th0MW1O+ZhMzcg0xreDqjTOdqXGKJPxqU/aea/R6SePjnpcvuY66rA48vE66rD2PYfp5B+2V/5zXXuN7r0v6DtGmHDUYzNjYtqbUT9TH/nByaCx4JEmOkeB7hferG2HNB9JdF/KZ6dMHQ+YsIZ5BlHNnJBPI/S0DzMTZdYg9N1u4ZUZk4anE9ckYIPnWmfHunR6OYyZT7mji2D2MGzdY7YRWcSgDTMy2OhYY6QVmr/6A8zwXCPNOss/qTbPZovJbE1DYa3m0bNrNcslxIYC1RD3PaK35Dbtm73m0creeBMxwqTc2D4t2c6UCs2bWrDXNLV2yGPiiO/uJUOWtPARYimxzHuKNG4ode1Ou+lm05ghG1G1zY2NYWvm82hB2ke2ePPAIIi2ekMaTIqRff6zccuNoeEluUjpnXQiU0OuAuNFR5O1Ec014Tj+ZHs8PME9VnTBaaqJ6RmeveFDEI4GjiJaYbJbboizztSTv0fnv9Kv/qhu+BxfPjwOir/7W910s9/y2fid39ZN/FoOj+Fv29GNY4+LY59KW8aEJBl7mnIE6dkvxYgYVEMjuhf33msXX9yOPzJe+Yq45qr4/Odg2luz1sustWZds1tvi+s/Pj7/rHjGk+28c+zuL4vm5JjsJRsimnbYUMCkbHyUpbY+xs94pembOceoyyAH7nRwFksqSUvk8fjWt3ofh3c8UROV2oE/e/s2b87Y845V2QkzKYbOcLu+Qo7A+vJ4md4yVL2YW8ZMRc10/PGKnviiZltOvJyXLtPczX9CBWtbZF2woxnHnPKbe+4lMbyooeVnGkffUBoWKktxz7SzpiWvhJGzrqx1MVn0oRaOki3fxcECpDBszeTzftQ/BnsHQJaJFj54BpjoW0dHEDEK9Ze8lUFqhn639K1rXXMUwVBto7+ypO0BDWPxHZSiYY0CfTT/5O+xPtOexpbClOW10MHQ08qQg6+deXKQHDtK+2KbywzJb2fx92RDwSWdaECNikHd1ruso/pdX7Gff3n+OPzJ3zWadWs04wYxhRjWhvctnbHG9xRqdwwTz0qde4GJCpTqZVjE1pQAikZWE6VCNMBVt9xgHPNT5wAAEABJREFUz/the+879PV7Qr15n6/BnXlMf2kyzIzVQQuh/L1eu3bFzo+1nzyRn6yxhQXckNJRbqeGIKfhIhcCHdLLX6Gt3wFGzHqDpdNHE4YG9ZcM1M0itnTH/7Dx0unsC+yc89YmnPsaHf9URiKGN0tN0QCVPdK6O3zdebxsh3PRoAHYiTChy9Zx4XbBkMPKzCOPWJZrcettzut1Xvh6kMbiCc2z5BrCwBqi5GoGj9bccm2wEFO2WBiT9lxaShh6bcxiNbXsh7gZOjQxt8xzE48OmTTGyaN3DA2IFhYza+mHyYNKV3+4u+urwboSG3L6hY9d+NjzsZbGiCBy7KW9G+dWy4NcNMKDB5S1279IYzJFsBPPUlrkGEYNo5HlY3Cy8YxhoiDx0W0hrmZ2wnGL2Fg0i53gMEzeiWY++XvtpBPjU/8x2rgzvjsZxl10Pog14wHAhGzOQLemjmew6EZIftxT4zi27U5bnhx60ohPCW6TgkxOk/hd5a2/HC89td11FyiDTCxE7/x+04yxwojxUeP3iebMpC7v1Gja77unXfLrcfqp2nUPSDPdxnle+NMoY3I6o6wuYwi2HWKnnZatTCrGvA/mWTiiUHad/rUgcuzxOvdcnftanfP6NQl29uvjhB9s5s2aRc4lpwe+SH81s4fPrGer5Viww2ZuB1M5mMMnHB/qxdSa0p6RNZmRLAHK8aKAlBjWVbM0wgc78rxOMbKCyWHZkKNAkV2QNWkfBvGRHmQXWLmmYR2a6Ntg8JEl9yvF8v3GGFQdkcOPwL5yqU93NcjyoRjtjfSpP2AnbkYCHdSYTOVio7+MCGbpPXkduz1ESs72impBxJqsY0gpRouUMfhw0cLHkJPWTbTelMdoSByhh4ZXMa/YQruZs7+fB8he/ts666dTJSXbM4iTRmldHCROziGUBQZcKddMrZ32EgZMwX/oINURyEbhhQOMhgzj4aoWF7y6+51/Qx26hjOe3wIogQQP7QJNk8MnYHNRZEKSyRRo3vRZfqyOO/8sqMernjxTonGFM7E8501W4ZaGJJeJwCnOPCuc92qKbNCDDgnnXRoe3unAkEFpvkmSunbBAifGHfOWhw2w6UWkn2vn0X62vC6d3s++DtXM83tuCwtrLhsHutEx3YfMhU6sKsaanBBLofdvBhvnnOAkVZhKAGwAYxHLdvdHf1+IVQLvqeVzCCg05Bv6dfOfSGxceYhSkfUvNyMTtSOm4MV1401xy3wxjN7cGBiNjXf0YX7IIS3/iXZGTJJLjcuahaBzbcwLj4vfFW/+ZboFnGnOZAfT3eC37vDObNjAm2vboX7KC8yMR5ztS4+yjR6iBL3xNbr6Q81JMi39CBs3hsJMd31FLzlNd99NSj7tJsaC0YIwdr0xclwXCnb4d/qxP2QcjTFz43UanVqoZKWtFIHJqKyUtXVgh8Uzkk2mZVM/an9PKP0ijkfvMXybllij3Q1/yuO8803HbRFCC2bBCrltgrSPrrpal/97u+UG3vlODTd/ToRbPqub/kSf+sP2tV0NaQsEyXK7qjYMU6dhVx4dYxiMQafOlH/8guasuVL12HGHnvNjzgsG5ZHqlmUzvgYfgwG67t3Oq3TJ28J3R/5eaNM8cTMU0mX0kI43Jh2/hITsmT9GlRa5w5B40UQpcUfiwqHR5zSVf+Rm54d74013LFzy0VKtbencrW/C3j336JUvsV1/J8yrSU5aGJ6mlcmzNGOP+ATvP5//YvELiTGS6UmX4/WIcpWwcgR85UxNLM36ubf88dNCJpSi6YSn5Lvh0LQjrAsTpaXh5GPmc25kVMdiBCCKGji7M7N27Qfj1y7QS0+Llz4vXnrygkEvO0WnP3/8slN1+gvaK1/RjQw1CX6NlZByCzEK47yQJl6YsEnkTp4b246dPRqKyPO2wVr7vu066YUMEyqyd+jaYr6ual44PnS336pf+xW6YDoIj5HraW22CDyPMPRbg9CzHWne2nOeK8TUyEFJO3IwS5hmZ2jWdf0fjN/3b7EIJ+uNb6vTyk9LZxypxbk5Axk8meK2O/q3/YKMV19tUouLIdkkTHeIHHvms8IO8lDn3ihMbFK/zqtDwFfH7OxancwolhlrxmUhT9mY7i8lCJnP9OQSMVl1RCssQgBauYaDrSewZWbBc5F3tVPrjCnK6PS8YYnd6DKj4zGek1LKPauhUAhNxkhMQUfmwjvqzTNGkX+axnz7P9H7P04Z9IhWlW9pevGMIWlNgjVmmn7tl/SN/yU2CnwRNFnrp/liEhVMXReKNpbzAoPyI3vmM9XcA44t+5XdE2X5TA33fj0uOMfD+QqFWTnvsqaWnZZBXQd+BE40z38DzkPd1Ve3T/9ux3ejph7uwtHexSBMMzOkbz3Utu9QeHbQrLVmln4NeXVaeQK+8iZn26LlameJGHNUzRQ9S+V+yVjQ9zChHyExwyXvQll3waKV+BACzWVCrKxxZjE/JPOhN6ERhRmVYemLX0JycPhtLQzyjS/1QuhM4QwHURTT46CUq2bRDjJ1dsQT/ezXaucnfdvBISqpGS+dR2aWN1qrw3XdR3XznySD6IftL+7bIt6QF2xsRX+dPiSHpx5roGC/KzpGd/q91X1v5OFXo+Rbf9l4i8JsZeLyYMzR4Fn58JKPct+LB7Sso1WPuZ7ZrxxNvflX5QrjleVI4SOuchpdzFpofMLT8IIeqWGRmTFlZBazUnn7SmDq5NhXA+utXGMGTlY7Z5NxiC3HYhxMYhorwkxSfiJPqmMRAqaub1BtIfabczFo9yLc3KzxpYjiZgbkGBkC4BFkqI1aJ47WOy81kMnwdvgTdexxqHlc9v74vet151fap2/SuecFZuSmvAaKj3pggrprFlp7zztxoac71qGDMoPGYu7QO3ogtK9R2EP8FDkpH/xKbObqWj632iRxwXPcdbd97IPh3Z7cZs4LSf2fPbf7fsFlMf17yWnUEGa3Ma94vvKXsfMjdIVnqxI36wPWU+02BcVGx/6gqTk9o2AYB9cKq0SA5bdKlmfUrPXMsZyIbO4aSyhYO4u6mmKRBYaJiLqwWWRxZkp9FiEQ6jsWseUEiwiUyqwzfgmcUqepdyEk+YtIyDrxgt2zYuTuW8cfp+e/MM55oy77YLfzj+xLd3WfuUUfuMrPPs+e/WPdkUerdQymEFB0VIr8CoCRJpvS3gFLvu02u/u/M4kMRYZDzKdH8S1NPRoFInq+jzgb4oi8P+HpQafEO5I5cqnqAUzYNuILh/e/V76ltTF1KBDWknAsfefeDAdwRgNbrAUPXCDHFv2H3xQREAcfmE93RvIw3NCOY7DjTcZjQc46zMT6rA4B5sfqGJ5Zq0wrAu6Z8Qag/9IXc9Llh6SFQk5f0gdQ4V1zLVKYghUmBFi9kQs6aVnzya11sA9pOCMUjTi6wxmZkPdogIbDjnt6/4qfswt/Q9f9Z7/zy7ryGn/zxe3cN+jZz9T2owNdyGIPGgvPdkS6ZQYngrjlzvhMCyub3hA+0RmebHsNx7UfMb54DI8uNq3NRpAQ71j2Fnjklf2Gx6jxXIzG7Ev3H//dnAnKz1BjT8SHm8So4D/lJyPNPvahcdeSc+BQRrJGfoYa+3wKU4cbODPADO6VXgTb91vvjLu/QqfyXi2fzWqadhiutTjsCG399maMVmPcje/MWDTrfZxYYtKdaSYORHpEz1TEOdDJpnfnQPiy3DbWnuZye7DE+s7UD6Y7yyCQku5r9z2KAQY4q7B/FIPdnng4745NdTwagQFyrpChYKpeIg+13jzVwjQWa1yyQOV5deNx2BN05j/3916uO/+6XXl196ZfjVNfYju+R0hhk5zhYuBcoopm7cAzXMz+popFeomLIbvxc/TUhz04PRdvJCCzN58iDwsh9rM9xTzVzqwFWqMjvuthxR52i0kUNgszXa3ZjTeNv/l3Nm4mpUuQyygb5dAKHc27sN6u/+Rgr2Fa2I49/R4SH37CGZns6CNxiUVEB/PbmTvxUXTMEL67yQZ8D6964O7NcCA6fs+G6dAdRsQOXPsr2dJig7GS7cyMrTDxYoV5iEfGhd0iMSKcFwqh1iyMLWcwgUOHfbeZTS++kIlNnNZYshpWPRDMEJmxC00QW7wY9U1CiQ45JE57QVy5U5/5gl3wFj37R01sA1lQgJf2KjvMbQI+a5E+ewEXlZ01GTqbd7wiv+OLvGHBVzaqbCyM2KLB2LfLedy1XqaAj47eMSYytRY45BO7eXGQx+c/6324mWGDx8Peuma2N7rcq7dgNOZv+ZTkgy20Hi9jiE87uZFz8HfgoQ9PuxHdizD0HXHXKF/JtYbLlFqrkKg7adybpbNh+DNevFdr5eqjtjsZmEcttnEKmFkny3FjHUa0r9zFlNTkfqFeGiuNbJRdKfF+5A7j0JKPTV4hAUeoRddGuWCA72M/9LF2znn61E1+4Xt0/PD/w7KWoFLguDrgeQqIvaxkfF8Wd0FiRGgGDzqJX8Fb8khl7aU7/n+Bqz5q7Cg8e8XcMa6Tbi7YBWuUiTBH8uhzBO8xEMEFyw6J0HG4DPE8UV038XVBGaF5E05lhsTdJLICZ7MwdTfejIPioW0MkGhSixwNNyOe9L3ZtZZPbpSUr3GK/J3cmByByyZKLWJklbMQh2yhc4aM+edM1xxMxjKT19fH15e7y/eWvSRzHDvDjPe4+78Tbw/Mf+4eGmIvIuNlguKQQ/T4wx9lEj/UQN2xXi1gxtVR9jCxkvXMn7BPf97Ofm1seyz4KRC8qIF2aBB40iDX+KqOJBlR1ATJo6qJKAkzFQxvQjKhT3Qyd+6d+l1/I+u8N0kp+ZadatzZpIskPzzAocWY1OA1dBvNxZxFvgUmZWrA4DBJ9yhQuO3630qtDFDj1NSKy8igTSz7rl2yYWPLzfROTdoJy8eajed4D+OusNaFrO8kb5aQzOezJP7nZW0+Fq6W/M3oj429uY2iHbQ23iyv1WFSLM/E+qrtDBpTSobbRLsvfjEjwy2RBYKpKUingpsYcJ3wdGYnKRUWIQDbSa5JCJbMgiPj7lsfqwvf65f9jg7eivwMuU1GMaIkyC23dULU5J0QQxNalSUygpkcD5JmKUxcwjdmS5jCDV+7L3+FXhjvobhH2XA4OyWblOb2EYG6rs7USSIuzGzbNjwdSFggNEyFaFdqnn+ySDK12+4EomCuVTtoVwr1dttf0iBu0tIi/crcoVD+MR9u9oZ8TceuyQ2hj3jQaO8tcKCvDJtZC7M+XOmV9WMePQfajYXbW1qqL634+i/NnEQtGtOSvrCN/+r/kPEfNwsHlg0bMVmTnEoMeDzzuZ1vOm4L05meCrcHMp1VzwqO1lk79GBdca2d8oKAp0He2MFlXE3qzCyVSs7ZlAKnoRiZznpDTVL8zUjUbB34jcSa8ZrB0IaGx0y1r9wtNZ5UIU8FJJH+mEmPMn9CPTt9sDV28cccjeZN620as2ZmkhvHnnJNzYT21PEAABAASURBVNIfyYZAnlb0aAos069239cwHGrERZe5mR5CdIu9sOFe1pc6OuhdN94tM1jFe9/ejvoOHXlEHPm4NQntyMfHe9+Jf33XtdhtZtFtiXi0jk3v8hrmPMokW0PPVqlpFp5Hwzjjx/y3W/9rjlt+SFsgMLj3p+Z0jLBnPSe2Pub+xIosSIBVQTpSlyt2WBwx8tG3/f3uimu14xhIspRDTcZ/hEEaqKDmSuRZ3USBHBk+w4MVU0JEjWokZenZ+YzTMcOfSYTnEn3sO77g4/oo0Glr5Eb+PhyLeB/yLGbJIbGZKbf8mUj6I0M2SWrAigttcZapmWWOWZ5JSlNc9t4SXW4YuoP19IzuyYlH3ixm2Iy9cItGWdEvijbv0rdupKSC/2miqSdrTUJOvhYWznuidJYvQ8OXrTVxZpmNJsplmlhf1VlyYcyhfrKKxvYtu/mGfpipemDNsS/JboVa0zARmYpKYZGZTPGs51I2NCIa0ZPErdSGs1b7sFBMHFabtGUxdRwtZyueN5ZQyGVGlYxw8cHfrMvmUkoRIXVlQrAqsAQSm5Oam3nr44Of0PYnkZxOSIY/4nANEYYGHyg8tp5UgslNopz2HiYK87EcIT40I2QhO0IHRfy+XTrvtbrkncQltHW47gU1uVmNc/7mmb5qbyQ971p6a2r0XXgtEhvdtOkeMDXpk2muWW+RXW+3DX8VY3oVRnNSmAmIcYX4DVbhZphIB4aqjYlgbZGWh1J7T49+jbRME3H44SyAAfCjWm9pllI+OMI+y3injbt7RjBzyQlfOS/T5NI+wzMmrImQNdfUmXRg/z85Qvtfe33WZDbln5iRvLEUu7j1L7pwfrjvGU7ykE45VymnobNcjPWyZ4xNjU772a9zi+i+1RrpuQ6ZkDEsXXJXNaRjnifjG20+Vzp+kIxzXmvnvGHBoLNfH696nc69wF/9Bj/ndXbW6+zsN9i5r7Md3x9jnB+8VutHrNBGh7Vih7PyYZwYw/sY2wVvsfwLigs3YELImjjC0cfsIfGkjYTDn1yKOPpFcqj5kEATvLJAtgSKO/6iXXJRPOPJcd2VjVzKacSw5moNz7v18Jmna+7ou6Mulh3XPbv65DDN+xw0CiOQTFsYMWF19HaANPU8VEA0CH03D9Nh5kwztKR0GkrsLXTYEWnViS1ugAKeJbLafFaRvG3JlPqsDoEB9+qYnlmrht70burmu/kWxs4dKRg1BD9phJA5kSIO1gNnTe6axGLLhdcf8UQd+4M+njMmqaXQdI0VSX5a4LJ6Idfq4HyEueH1t+yMf45Ya/r/lqw76406+9Vx1ut01ut17ht07utFvPXCeaEbdHIUzWRdJqyQ68Ya7sVpXmNsd9uP1cv/RaOpafYDthJyZuIwteEe4nSUZPEJEnmoEo3UkqDkHV/U5f9Or/yZduz3xfOeYZe8y3fd2+YhMx9ZOkaBI1jqtU6OEZoeRvcaZxld9I7fGRfzfoDqwYwOp6vSOJ7wxGZydVLLLzTM2WZYzg2pVupoeBhHH4M5vGzpKs0MvpC0QMA/De4pWkdxC1+k9AIGKmmJBFZdjJboz6oXZz4xxbtcPuMuDnLr+09+QsHmZmjactY1JG+4kymD8gi0kFs0wzp2i7ro4nG32ziCBZTvDcPJbll0VT844GqtycaBc1u/XT/9c2IhT2k013aQ59ZY/03K1W733je+87aUEbmxxAIB4cJDwyi6IoGnBY+evmmL3M30i/8K0zjxcON770O95WpPD5VviZzORTLvDP+BrLAsMM7/6cf7/72fdab90x3xk8+Mt/yyPvnxdu/fmOZEgQh3nlWdWUsTtCqZDRetk4MhNvpqIXqudteXJZ/uurchzzgbFYKIbf/HZqZe4hW3ofPiMGySQmxFQv7LbrLt/2RiPluWjP807WjZGVO75T+5qJSuBF+YpxWv9GUT8GVbWGcGTGLRCNXgY32EdTD41H9UqiDCJ6VIp6DE/Ssqp2XqjVHXcopm1mFHjF75Jio0E6tG1lqgttjSqh5hY+x3Mnpg6ow3LQdvY/utKQe+5TcRk3IhuegdSdf//qiNPeZCo4heNjYb+hV5nmJpicm5fs2dPahp+zFx3AkK5z3BNCvGFycb4IfzkGE41ERCRqzpk7+vC14TJ5+oo45oLz25vfVN7frfj2/8rZEdvF4adeHN5sMaQTz2bv+LCMvOTASSpqc1PGPpjSehGQpNVxp9QJL/avh7dtP97PZktUhkIBnZic9OMJ1yDxAMfGAmoue8p+zyL9YaO/XjT5AbnHOkHsWmGw7iIROXx05syV5S81FqVfb+E1h1Mdp/11apJnuZMITAWROtIxrydv3vKSe+o9Gsij2zNUKTyefD1OXEbcpEY5qGyc59je3YYSgSa0hpwI07rephbUvDLVxEzk44Tmeybeftu09vNDuauWy1msTaj7Cb/lOwWVdvLDZU1Y000RGjBNeVCB7NPDQvuV7+s5r8vgrzxW1bviTvQmY99eLee+3S3+ifvEPnnOEf+6Bu+3NrFukrF+8ZBjEevHAIi6YW9MObMOHbv18WRltBFv1cuX5hczVD9mmwz9B0zMyAxTjuvntIm3KK+9MBwORQ8NpwxzHWeh6u5BlzHgaRWdyuSAhGYush9pwf3WvNiZDIeVrI4Ynwm250UXl3hAVjPK10pS+bgC/bwnoxsMdP9i9uuYFVY3aNLTx4pXn9H9iurymUcoAiSb1yRz7IA8lZt6Xqt4yhLghLxmQXXcbvmR5dSEzVNqmgVT0c71s027bNLrzY8CgWaxbH6EDQW4qifJLde1+79qMpIkNPo0fUMenG94BYsfnQWnP1HnO9Qs/6cTMTwi3c1dQjZK1j2z5QHDW+TvHr6CUX+a5din7cmfIVOl8yLC0Yb9UknkwkR8g75xmHXlj+HktbhjLSNMNrZKxYv7TKh1sek0boTc5CEm7/00nKI89BEgQ4I5RwkMyo1PSKn2s8XKPnAd71WSoGbFqhw8L9xP9bBx/C1GLmiwkmlsijtGFf+UrwXJZ75HMIR1fInTKzAIF1M+kX8H2/kkxss3OeoweDWDDBvpny8ek/RFokz3XAJZeKbGhicvas1EgyQ2ZGQ45r+9H6hX897khnzrIwJ7WHzNU5Be8cnMUxirdeaoc9USYeUKGp7ebCM0q5ZY+ccogmEFhcGv63Ot61idBH7rK1UkfHG/fI5T539I5+6zbRXgBt0fmGH44g8bRRXPth/fzLteueQKrwOrY4xqyJrlsIlZebGaIfPJ3Meh4mJjNSPPsIkGAsibpRcaV6tfp22Dk09fQ63ZdAEky8W/9CU44HekdfzagoAdnt5Bf6YYeZgJAfbHKxKUb2I5mmxI/zkoVrGBcimagpB+5F6M47xAQ2Fp3oVkfilOKVvHwCvnwT680Cqz1dzonOJGNq8t6ZXfnv/LZyVeTugynHmmHy6QFdcBn/IU9ZNz8Uyov8lBeNLrzUwhv7YibtoC+mzObTm2OEJTqUXehE+Qclmxl3ZsY7B4uOtYqRTMFPM+IsfvY+Ovv1evZziA8+dcaFQgsGI7WpsbBEKaNHl+f/MZkei+6Lq2VPMx9XtVJHNmjG9iyOe9oeu+nJVPN0TYEuh/HsvOuv2pv/lUMhn1zsvQMOBoGhNjf3e64cMqcPQ2GugyQ2c3WUDZ4UXAjGZ30EODCPAggxAkCHFGrUbvkTvCeLwAAGHwZukpQElP2zPNtwK3Ip+urzBVFuBiDDjGoa6looyLPWPAzs1ig1NXiPMRuQmgKvxHueM38uDj8isEPdHJqWzYujUThnJhfuCEMkTGIC3/SfJRFNC+JofNZTWFe+7ll368rnVXHWbr81bvkjyU1mxgoINrTSVD45WXOhDDP3lJ+yl/8LtR7RUcz3zpcDlg+rh5f6xKNhdZrXrA8NTSqPXBVKkerCezWsOEtCGne7SXUsscZOfUH+wUcqksW+NWRZdeFPZLLLhyIsxZs/53/+RWlqv7L4inysOTjAtP2f0AtaxurgDNcFQpbJKmPB8ZJf7+77GpvxyL8AtUDhRZKCH4pdesITaNnUjKIT6SGyHoIz+fCzjSdjKxt5m9eNt+jeXfTFUE6eZTLmCbeL8aToyS/MJyva7Sh4s2bh/ITukaPfmKQec06i5O1BuxZaf1Aw/MiJSK0+sKlojVeCB9s5bzDlxDOsZbqGg2L4F9QirwkHW6YHHpMgu+lzQXnx6O/dMMBQZX59VoNAwd1DtfGa/dL35Gw0RfSurkOd9mQucGFiIkMeXFlwijf9mt7+b6nasxqZymw51ZTahBV21gtYeHBSY7EqGw9SmfTYNXO276xMnGnslA4KdnDm7bQX+FsvoZgZrYXxPpmlhdBr4SNFM7CcMpfXS94la07qwsVXLNWjazwf6cjhRzQ6ghxJJrRbCx70BO6KOcn9k3+gZh0vZsMWLLxIouXf7Zzvj3hidhFZT1J0f93M88ZQ5u8HNrZeHmqdOuTw/+imG7LXPubsMg56pkXxQMAue18csrXFGJCdIbt9jj5WmUjcaR7pJqXveswuHFpv1nXRcMbyGeDO3Xt/R7xqQ6NzDobEhMLXwUAEvg0x4SdZMgaTMn3c9ZV2GxsL4RgFIkjkWmG1CPhqGV5vdh0huOFzupmdhQwtZebBZrHpl38oIwxFYmbL5H7Kabrw0m7rtpzmhhY70zfkzPWwpn07jGI0zRIffgpL+yzvkUXbbf5NO/t8v/A9wjGNMT5Yxg0z2qfiQiHE4mQ5UafZzTeNb/pP8i7Y7y9UeAXTAkVFOaKP405wdZKbmmL6DlH0oeOjG29o3/hbig7Ssa/ctPegTYuRP+X4wYFMZQwnapI3M/9hMrUIs27EBtmjWWu9h23R9f8R3yNJCrQEE7Saph7Ukh18qF30nk5bAm1mJoS7rPnYuWfWYCm4dBZA0oLH2H3P7O074/1M9DrrDXbsDyqf0/l8ALii4Qr+DF7lNU0NJpmlxGk0rLNP/R55lp1yp1laJ6/CqhHwVbO8zgyPhz1RXPpO5p+YwcaE5Xvo1F70uY8OChOY2UM516kvsA9cq2OepJhnlYoNEbLOZosnx1Bi8ROmkCEzrm6as8ady6P183bIP7D3XqlzX0MSRgytHGIImcnSDy18mA1SbuS6LnnHHGsrF9yqj/tYvZt5G5mMtofgvbUhssAphrTU9C98ziLcxIuDSeKQs6+nCLMd32/wyXYbJ5rfI09aB0f6P1E9M+ujmRwl5Kfv639Pu3gzwzQNOpWBp5+mj2Mojyad+OPtoneBsznfigC8xSInVc/Dg7kxKURKRhb+oO6Zwdt/xuX5p7ezX5u3PKdDZm0sk3lkkpIzLWm4s7yYDZegkOKqj5o6YxKYJsfe6+SuzitMYPrkWOGGZt2ccYTHzf+5XfcxMQUbO5bFXqd0OV+NXjXjK20LYmLLFXHUk9oV19grfr4FGhWmuaDo9EVIs1lVOfsNK5a1uGqey0/cAAAQAElEQVR4PJhYna7nv8w+/YU48cfy1lrQEAbDaZgGZCiAph2UoQkM9tf/Xtz8n1pWmFZ2JdNHbDb7hijhHqscUZFaF48y3wwM/dibNwHCF+vYNGe7+Tj1+cp9JezotyJg8CjtTjO2Vuk8f8Nc+QYEDZ7vR73u+7oYwdCIeYVbAVSegMSmBBM9z2mi8FNepAvf2/XzcA39H6BE6zqQNKIU6324Lmho1HzMULDF0MhOeUl727vMGBwxjxozf/BHVE9/ZEQ0tIlVHlNYzPQYm3T7re3OL7bYHRr+rGqmy9SpjlUjwAivmu11ZdjRIWtNbr/2C+3v/pbJifvBZ/HQkKuc7MO0dqGjkh98iC74VX3683bqS41XltF8yF7QEsv4gfQsFy2idcbCZuHYcU+ND17lb3u3Dj54Ypu10XAyJGusDAyTIjVNOTqxgt12fa176y82VqRkGi7ac6zSJTQfbnbssfDAOdAofJGGjdVu+NZkc2gQvSMlH4tL9A8lt2f9hGLUhCDRe8ENU0s0s2bF8ZYJYLTPNIgw67yp63v1nS5+h3LwGrlhWrxTEUEJzmY9xuzUF8QHrst/LRKN9gjLRuDs4c1GWKPMgoGSiXLbIX7Ru3ThexhHg6vwoXl0Mqr3eIXih4jkixqFSzLDVzGqMjb54/a+f2vRWycM5pTEf7OsojpWi0AOw2rZXld2jRkv5Tze9TV/wxvCrWf+xfQ+kEumM4P55A1lma0hVIUM+RFPMET5j25pP/XitnVbJi30MTOSaR2BZiliJEb57573p7zQP/7JuHJn9+Snk8haGXJZVOpoIisp2zLWjlisGFkwxORJcOnF+qu7uy4bG+dpwbIrmeisfMnumQ+WtEnRxENQUw/0hVKZvW2rAo1wUvJ2iR8/7Yw47HAZ3aZF9S6O/TNFxQMf+hh3PjgtupBPeh7zjfkBvbv+ym6+wYKZGsbYW6+cGQv7aGKY3VJAJ79zNDv2af6ZG41dfDPT2DTnsrCxmE4ZFrbDSxQd/3R9/A91yosDH7JF6uLDMEAh4yd9iRnIiLcQ9xLmiHFVb2Zo+V3/y6/9kIVbP5e3ns8W8XsMBrNUfVaFgK+K1XVoFOl0BMiZ7tKnflc7P7YXTWOu7pmqw04DtdKe+6GfLKM9VzGzTc5Z9x+HP9HferF//k677HK9/Ofs+OMVqVxmRsRy8YaFopm2PZZVZGe/fvS+j8d/+cvuwvdo+5MMOzbY42xmGBeH85HcNERMlmu44dVev8ZDJFNMils+F++7LJ8JjcWmrlGLTmlVj2ybnt725+lahIxGcXhqm/iJ/6LK8U/3FpFlm1EZHaCSZT5XuspICb0YdMFCkQUwPvRo2yFxzhvNehRLQaKgTGRv5TQw4x8Xv5HExMmI7Db9xX8PbzbSm39B1kzWG2PPVVMP25Oz9+qw0NZDddF77NM326mnx7a/P1ZEm1Pqe85JWjWzpn6omVPInvV/d1dcpys/mn9djmwyMjufFmZpj4+Jk8xMJgYNmxJRG8ZII2rFyC59C32RcrAk2grjRiw2z2t9VofAAYS7Oh1YKatMwmZbWmtuzgSOt7zJbr+VhSSBiFmIdqBXQymW354FsJTGn/WjetOv6vKP60t36b/cFpdfFx+8Rh/YqSs/pis/4f/PnbrlNrv8mnbuG3TccUuxu6es8WXZZDgYCo1YtuIw5Z+PPu9cniLqEQUKafIhc1WDy3qnxdZY22YReLZYgz0rH6dR6u1H64n/F/pu9CaQ7hFikDkyDuxwG9lBxxzZFvw6wuiI/PamX7HD/2Eo/zyQhsNleX2UxrPIjH+GLbbi9j+Pa66i1x09Gp5e++P2EU9oF/663XLn6JIr/NXnxnE/FEd/f/BqnR9xDt7qJ/yInfKCePsl/oW/jMv+gx133EBbNCrWQseHNhufBcMI3baEzkhRKNTrq1+ev/ojCxauxFUl4KtqfX0ZN/8WwqHerY386/e1N/687r0vuxBqqZqSG4uKL6qNd4eZsZRP5IzPD4J18KFx/FP82Kfq2KfbcT+k44/TYw4x65r1vHIJ1pGWPi6BOoZMBBv8jUHF2xtf3e7+b40nVhemLr+d8HV4P+xraQe9cDX0md2ccqOtEBLNaWE7HTmIN/CpdcoLrPFfOozoBDvWAU5TL/HEGFm+VUg7zbs+e6vY9ti48N3dqS8cp+6bDRTQlyxkjbuMrOcPLBIJv8+/7Rfs3l10JXgQworYEkPILb/HSc95Tpx1Xnf5tb7zD/yOv7bb/5c+/yVdfpUuvMRPfkl7zFY4R/KUjOe0WASMEqOomDo/g3HOD+W7yZi28181p6nlVceqESjoe9B6Q4vQhDnWjKzlQrrjjvbzZwbrh+SUB2feyrxrlrN2T719vlhLU2mtw47zSjq47g2WER9aMRtu9tnwpGDgpLH0aIXVZ3KzJl3wan36Ex4HaXLggzlZHuNJwuqdzeieBz268YZevEVGhGVmU1s0GXCSsevMn9Ex/9gb9+Exh0ZH9I4ehTMuaSH4asIekbv8s0i24xi/cqef9CKFj7LJtBWSmUkYyTOR9R5GTM3Y7V/fpfNeI5OFm1xLPpqCugJnT90BUaQdBqthVtEzgaDGY1UaWUiGUsPRMpe7HFpNOyxzmYyiliT75Cd142cjn8pakaOM7DsB3/eiG7xk/tN5aMd8zk5EkP21ZDd/Ls5/VS6G5k3zw+RuYhWYlnqEqM33XhZkxnL6W64lFA0VlFgLXIfhCLVcUlrSYRqnuVzwLEVjicaVv6WrP+Ax12K3iWdXxwYafRASObSzJPtLLdzCPIZm/ud/5xIpH4vbaIKsQYlt+CG64mP9McfIdjebpy+OZEQgOiOZW8jG5vNO/PAn2EUX285Pt+1H0a2sbOLM84CrQhwUm0SIr+MAzAj3UTPvr79OOz/CjJGAttQ+OWQiP8g7NpIRdyAyMbNlbF0o4q3TiMScMOKR6yJRYiKFmtnUdpvCDPyMlsfdX9GbzqG45KrjgBMo6HuQj8Usd+9HjfcyTPuOhWPk2TUfjTedy+T0NhepjqHINUDWkoJhIrDL5BeH0ZpyqdCsy3iayG2i6WEiRUs+2B3bsBQlluDOq/XmX1KMWozdtmAT3/vOeEZFmPO9Qat7wA5nspc33EjcJtDyfkq7KV6Z1QL3pW3bup1/5Bdd5kce7SPrWyPPLGVDrW+H/6M49SVx6eX6zM1xygvJ8ua0Qt0JX0qSOBjKK2OWl/X98WCG9G481eKg9uZfitv/QuH71ydYja3PumAzhVqyCin6xo8zZGA5xLQxWiQ5y5DaJCos1qgLu25MsJC98sz4+jesEzOByhUOMAE/wO3NbHOjaM1a68YWg4+tNR8zKY2fT6/5UFxwLrPfmNlMVSPKLNeSj1whHsFKCkwES0fwJ6h5Jnqm7tlMLdV4sO2KSLtEdn7Mzz8X5wnIXGieToWzJWOZbgm+P/DVe6kNLLF8Nq3Owtvn/5i+0StxwcEpdihP7ynj+BYUak29Tn6hPvHHuunO7oMftyuu0xU77QM747/81+4zN+tt79Kzf0z0isLWwkONTX3zSMrYmag8hgYqRmRpYdZKR2/RxNg1M+/tnnvtvFe3yW9CS3E1KDzAGIn9i0MNVhLTMhgjU+fRkTGGosnUeqRZ4juTcSJCiMkdsYWDMXBMZb7y3vpnpnGo9zZauGilriYBX03j68v2Qcx0xELDRHcb5WYw1OxbHnO6+iPtgnO4yy5Fnpb8CQ315s1RdAQnZJmEFim1PVyGzbxlb0RsiYF1KMO26eoP641nB9UjDaVoDj3KJqOP0bw3Gl71xeZNjUVuu/Xlr8YdfyHhjKcE49hCwcIzmf57J2vR3KPLXpC6baueckIcf1w7/ngd+1Q7+GDSQsZZ2YR4sHETtBC+J1n5PYYMei2eb/gylF6/J7bCjBvds8g/SUR/221f9LNfutQeUTGrRJ74mFwBuITUZOAnKFL4LcswGDI1IyuIiLmKG0mU6JTg0bXzz2nXfjjMB2v8WDCeUraSV5GAr6LtdWU61Jsm01d5oArciy+YI7Ia8/Saa+P81zC5h0IDt1BjHXBq4hpUyw+XxjVD9KRzjzFqYc80x60wm+vDJ4ncDiFzLE/5ofqkbt6k+ck1LRNLg1liaJ97Qi7RFtd9qF3wKu4IngVYlE7crBssu9pwNTwmeVXDSEZjB2Ub+S/Ic+U2nSGW5LhMQgwdnfhlwwU+FDTZpICcmAmhceWRZxNF6UVHL1OGgu7me4b88GwIkhWWv6DY3ip5Xbcfb2bZx0Au6RHP7DzfeGPjx1XeuE36lZ2ezJD7JwaIRDJhKJK3GaFyXobP3rgnUuWd7TlnNjWDHIFbDITyqZlpfJiWw5lieWXrQAo37/8tu+bDjIcp/yyTBy656jjgBAr6oyAPoe/qfNzsW7bzQ3HSs7RrF1N5CKw2G6uXN5mQGJZciHUVxFlSZp1MvM03s+nNLJyTFvbktOAhsSeemyxuWehNtJCpeJIXU/+2f9W/8dW0ZHxvbuPGDk9rNr7N6TdcepfZVR+zu+8SW750VPhtexyjE03Gf01LPIzyweuJvUYNi0m7S6WDkkUAZo62MmjDHnHNB3R+Dnr2kIFXTteQ8wzIlMYQEG2mpoFMJi7pA2jCQ6tkQn6aMf0zq6V9yw1ErpG3/lLIcaHn9x4aNcY3C9XnABPwA9zeumvOre/FVrBTsGw8brtN6Pvtf56zmUlrGokfWlNHuZOQFdZVblhQl5SVoIBlZIk9762JxwZrg4rDsmFxpp1GO12ejEdIDp9R4Mt36YzTun//W/wc3JzNrLG0PA7SnrWnNTjCweZ8v8fNru/5dZcnHIIbyq4hvOmTS4T93Nlho6M6oAhKNkoJYwgEo7BB901oG49DbdAjCV/9kZ4X3OKRnt8+m83TV0sUSddgAaVw3nQZGSsUjP04Qxx8r1VgP0PTtR+LN/LrVKe8lXlPa83NGCpiFQ4sAT+wza2/1loYc9SZvxbzslwzX/lvet6zdPG7jeVECJE4cGT/kh1kKnMbbmPLyU0SgsZ5SYH1oVRGR6OomF8IhrbCG6LlMkI2TGPX/2477cR245+QNSa19RYeNte0p3Wqr03ADc0HbQPxU5+I6//Q8Fj0Sui+OEJDrhFdamgKqmX11BGneo+4ZZwosd6GdqShSRtwagMevNZm0P2aD/cnPcvu+wZPT9PcQCaZaADEDiFh+Z67FaEQhmarZ3byMy8zk3DBa+O8V7JQlP+gad+i8zbyfgs7o8bXuBVptYxMI7BQ+jADFsqotD0EjG+2aKXUrGO3wlTVCOVol14UJ/9I3H4bWxgpC+R7gFxLKBlvJMKEurDfz2QtXVyyWrB4lLYxGyxNN0eq8qWnGgt1vn3ly37GyTrrFfb1vxWvbmzOc211YeNu3OUjh5/h9nRjLS7W8J6GIeJspM8/S3d8MbmkBDvpxHk2ZQfpD/dLCS6bVE8SQ/VR8KwgY/FRpwAAEABJREFUoOyynVfZTTfKxpikgAGQ2EYMfCnx7LT8tj/VTz7D7rzNspsN9gGWAJOEDgepu43TCoU0FcxwxkG2616dfmq7+kozZh0tuuTOYpGPu91qxvNmhZotM0sgwDAsofRmLNp34ZZSyxSN3iKJofJE7C9utef9UHvTq+Kur5hk1okj3DSyrJHrqXeqkbrkYEKjw9WkbFGmDJoc87rvXrvkEn/GU9qNNyOdipHbltbGCHp+K+cx5LuR01g7cYcPr3t5JPbO4kZq5jp+qzj9NLvtVhLpRq9G3xDoyA4OfSR130PAo4V6VygcYRdPCYTlG7v4Sbmdf7byncCoZQGj6L4bXoclmaAuBv3uv2rP/Wd6/28nUhIA4iAKegRn0xZQEV9OyIUwqR9igjWepNf/vp7xZLvxBkfPGYZwdkM8cvCHoWcA+B08d0STWnU+gAT8ALa1LpvyLicwy4SL+fCG0cfGq0Yfy6x5Z9d81E58Slxwbtx1t0zaM5FdxpMgdUu5/25a6sE6wYLE0uSLAosIA7lmdt2jSy5pJz5Zl7w9bOzRaJOly49XnY2IoHRDYZ4qEb6bWmsSzOebueRdjNEe03jcjWPX3/ZnnKQ7blVj05dwTA3h3x8PqRb0saOTMB/IS9d9sD3vGd01H/PmyBBD5kGB/TG/XupYDHPT0VpmzEgxam/5RXvZqfnjEGxhbEZfLPqcSRnlbv+DmaWdlm/88p+4eeUr2tk/3e69h1GMlj814Y2GcWnqO3U5B/rWvO1/k1Vzfwn4/lbcLPVadOxQnF+FpGCWylxdeND/kHvqbotmKfE/8o/7s87Q9Z80oSqojfNhNYVxci31cNRrJLkF7cnMdNuf602viydvb5dcZLu+1khr3zbfycR3Yd7CeGocFShOVfZx45E1LGhNDrhZYnJ8aGFSG/H6Nby75170t13x70TX1IIs9t6RPJfmZ9DfoQadbR633BCnn2xveJ1/+e5Qj8SYOm/G2EFOG/cYs1+GZOuzp0y8bt5gffNn46Qf0fmv1zfu2Yu2a5aKvFQSCwxM9PP/55u69J3tGcfp+v+Y/2yH8ICBbKNGI8E8RNlpyFpvZqLltZuH2sSHb+K+71PXUeoUKcvCZhZiR5gnEpnEGeScM9XcP/kH8cqXxY+coLf+knjnK16+U9FZblwIIRHUsMDdJD5EWIKZQZy8xiId8pQlb7+1v/CX9Iwf0EnPbNd+lLYGXxzHwsd87Q20DDEbHLPUU74xoJe98QRC+DC5lDDxIvCgHz6Te6LTjbCsIdMbj5lGqUkNI2ZtcJJ0bjwsc7kxROBt5/GjdH8zr8UpSLop+I9iGSYWMjb55D1lWpYY4nmiHpev3J1vIZ75ZH/J8+Kmm9T18AkB3LEXqDsIs9rE0ILndn8q9iZBQXUNo40pycaZnv4/UFiCOB+uk9D6yXVP2kNK7s1Z+WuHZ3xZNDeedpJFPs5hY0ydqz/EVIzzz9VdX5Zk/AeUhw5lTG4xosnB9BsiQwonG+4UPIaZo9Jdd+myX5/74R+IS95hu+4hN0efLnPhzJxzfEhnJlnKhcEG5ADRmDhb5wkBn1zqvGIE3Oyu/9Ff8dv9mafqyUe3s15ml7xbN93MW3IJseOVTo90NOuHldNySUaPOLL0RBL3992nL3yWxdP9/Bn98UfppBO79/32/F1fCfOun9cqHykKEYYbjkfGmh3Wv09tNnIx83xJOYxRyF2GkWnlgwwbj/qRbvtTf9lJ9oyn6n3/zvihVX0jK0NLFQ2Bi7sIBeIll5BqSAkLdvNndfE7xqec2J7xT/TWX+E3j2YICjUsxFa2IUVGFUBzmzWaph5YnuTmebDiPDUpji4hVnwtC0xZ8698RW1SGPP4RcdDltYpTOhCeROkNW4ztC7Pa/ExdYLbrv/Xr/2IgHzWmXbNVUxCCx78etCRPYKwYuK82yQvL814Qkxu77svPn5VvPKM9owf6Nmz78p/c3iSU+eZJcDQzqxv69IxQ7TdrIUhVvfu0qf+QJe+NU4/qf+Bf6SjntDOeL5e9iI773X+nnfbpRe1S36dr7d676/rvFe1038qznheHPn49gPfHS95flz6Tn369/2eryFuaMmIJdnGsm7VoRz+RLv5prj5hv7zf0KE5W1Im6YeYSLkWyE2d9YMdc2/P5XasGAdGza4vDEKA1M3f9eX9LZfjuc9Q894up31UiS7ff6zuuXGuPtuqsfdf2U33xifv8EueWdccpG/8qd10rPse74zXpp8/LY/j453672p0Z4Nh8M9//33cdz+Z3bzzXbTjYF/i3ZB6F0qWz4VKJzWQhiT8oHlJKcF6ctf1i036K/+F47x5YghFo2h/VmXNE+JJG4oO6PFypoPvkmQsxahpRe46SYLfSuu/712/jntKf+fduapcenb9MlPiu2CxtK8Av9wXum/jdWYccrzV+/SzTf1l74tTj81fuAoe8PZfv0fWtBnaGOdWhVmmgBTcKb9W3/O2Rw7Ptw29z6a88qeReOosjeE4MbPxi1/FNd+MC57h979bjTL3vPrcfE7tPNDuuk/6aYbqNi1x4SPkRjsGPXC0a5cVCmcuRAps4rhrr+K03/SzjjJX/Z8veQkHfVdceR36HsfH0c+bsGgIx+nS96Jixr+ICZfw9WNxHNoiostlbfr+j6Vs0Wnjm5KPv6f/9X/8NPx3t+wl5zaTj9Jz/inNK0feTJxf+lp7T3v5BEY1/9/7fb/0nxOCGi4qfNIM5y4NEOn5gdWvMDZYr/2S+MzfiJedgp22vfQi4X9b0c+rh31OB35Xe17v1PewRfMYI+GhOFahPpspu96PD39eeMffZK+5ztH3/u42JFMuu2HgcWgdBSRx8d2Gnp8fO/jwdK+5wk8kLRGB8+kPszUNet7c0lMIY853fhZXfLuOOel7cR/qiMfb2w4jhq83f5d3MaRh2vH49r274jt3xk//JT2spNH77lYN31WAIdLmHhD1UHeVMfME8hRn3knV9nBFTUf+pZZpPIE20ohDZi3hkaYp150qUQkoRsdLxlIaqTkqkGokChE3ecV3DgSo76ZB6G1Jrls1Xfupjm86/P9g6IbtbAwekHawgE1VPC2udHTZvhsuGo6aOHSkqlleZtDM8OoEQonjLLFIYtuajia4YyJ50Wfb0uahbjmdxgqNjbFDWMms14kjAwh0wiLfbebDMp2bcRjkjyqacphGlM4Il1nTIT70fEU5u3SWPm3gfheIHzreppRjNjaBs8Aw+eg71lFeEgv8o0ZtzYYbPjlYXRtSrurnTy26Bo0em/eQU6udD1JcsfXJ2sjsw6HnW5IzgAOPkWYBePYcUdWWGYYaYLEmIjAraEOJSrMMAGfYd/Wp2u5czdWBEuobzLrmnqPXCHRdezls1e5RFhWgdKbxEoSykXIOLpOtUYxSjTv5qP11tAaaaJ95KxiCOVGr3NZjz6M8YjoIu2l84F3aMHYrR/+ykqgfNOqNA8Lt9YLraFyH/JUirAmdsjDPz5Fgbx1+GU2PoQJngZbeZNRwFI+G8VwGL3ngQEuwTLUNacA0HgoEnF189ZP9YfNrHXCHFYl41V19OY9GjcyWtcoGMFvCZ/NZLtx2cw0HIPjCslCuEL30weba96ARqLW7hhFyBhBHOlaz4C4xYgpxCYBctyIOUosPJkRjwchMoNeSGCXWfaW8aK6d9E6CJC4dj2rlveVgO9rwSq3bwRyWyPWi/FhGbBl72w09hHbQwSoYykhBK1lkWCJDfwb60gutI09YD8mjSyl2PNUGMm68KwhR8u0+gctqvXjbi7EBtUaa9wftPIf6gByhoY2ZIDNeOvY65pRxR5a6oE75+2GYRHlQH8iqBzWo4a8n+aXZqdxjDVDZFvXzE3jQHewaTJ21Br78P8IdJkkaoujBSc3M6ARIGwIrPFwMDOqd1ijxEKBfKDLKNzSQguqqHHKirQR6h2vgiZa6NuwQZe5yYiJSN4ag8cYsUceWQtM5Hgxblqzow/mWLrXa7d3LXxMH5vLjamoMOE79HJGtZ7nkNso+yJlzyneKJLxhCPJmAzzEizGFNiTyH2FvQRm8Ooz6NO6dmnUWDms754Py8DEQohRG/cG6hatS4n2oBDrbbKA8syy0e6UdHk3XJTlEBkKskpTbMBi00VKK3WYZavedWioIdO9B78i2FTzbHIbuewNe6GHY0cWeGpNK59qwjYXLNYsnGK0N2qtGYR4Mno0wxY+hECxO8tYB0RnR27soEfkkxXmEBqKjaiJaGG1R1nlTZjGeMMNlFfiJ1HaWTjYkIwP7jxs5pulonFuEWaWmXgUnU0O5V8Kwy7pCCJngltGaSjd1GChGd9lYu3+BhledZ4DQQc6G0HGGr0LZyjFNzMYIeU2VlCgGbxHQKMWHNR4JkbIU+uHxyrpfYw7Y6THo5hjrMIaiRVmnECurhl3cX25FyZLzXJDv1gjg/dh6BQxlw2iwSoz1MdJQrbyLDnCvbf8JIWzSRNrmhyPKDBJXslzqhROsrRZ8/RGoX4x+zyu6ItY7cgBHR2qTPeTHkkJxx5klGoWSDEWek+tNFnLoBHmbCiJG/liwRq3qUHoTkZFvONZmW6rC6eWGXtmDzRrqMgJI5wXCUEJDGrY1eaNaGW4Ss1ogrrDrRNJ1ZSoQZxi958pqb1dwyO1zshbowAPSNI4EcnBQoAhKYnL2iTC2fLT6GNGlNyMQ0lAVAxmgjAVAVCq9mQanFXHrBPwWXew/CsCReDBBCpeBPaNQIn7vnGqUkWgCBSBdUWgxH1dDVc5WwSKQBHYNwIl7vvGaTOWqj4XgSKwjgmUuK/jwSvXi0ARKALTCJS4TyNT6UWgCBSBdUxgJsR9HfMr14tAESgCM0mgxH0mh6WcKgJFoAgsj0CJ+/L4Ve0iUARmgkA58XACJe4PJ1L3RaAIFIENQKDEfQMMYnWhCBSBIvBwAiXuDydS90VgcQKVWwTWBYES93UxTOVkESgCRWBpBErcl8arSheBIlAE1gWBEvcZHqZyrQgUgSKwvwRK3PeXXNUrAkWgCMwwgRL3GR6ccq0IFIEisL8EJuK+v7WrXhEoAkWgCMwkgRL3mRyWcqoIFIEisDwCJe7L41e1i0ARmBCo84wRKHGfsQEpd4pAESgCK0GgxH0lKJaNIlAEisCMEShxn7EBKXcenUCVKAJF4NEJlLg/OqMqUQSKQBFYdwRK3NfdkJXDRaAIFIFHJ1DivhijyisCRaAIrFMCJe7rdODK7SJQBIrAYgRK3BejU3lFoAgUgeURWLPaJe5rhr4aLgJFoAisHoES99VjW5aLQBEoAmtGoMR9zdBXw0VgZQmUtSLwYAIl7g+mUfEiUASKwAYhUOK+QQayulEEikAReDCBEvcH06j4vhGoUkWgCMw8gRL3mR+icrAIFIEisHQCJe5LZ1Y1ikARKAIzT2DGxX3m+ZWDRaAIFIGZJFDiPpPDUk4VgSJQBJZHoMR9eVYCd+8AAAjZSURBVPyqdhEoAjNOYLO6V+K+WUe++l0EisCGJlDivqGHtzpXBIrAZiVQ4r5ZR776vfIEymIRmCECJe4zNBjlShEoAkVgpQiUuK8UybJTBIpAEZghAiXuMzQY++5KlSwCRaAILE6gxH1xPpVbBIpAEViXBErc1+WwldNFoAgUgcUJPJq4L167cotAESgCRWAmCZS4z+SwlFNFoAgUgeURKHFfHr+qXQSKwKMRqPw1IVDivibYq9EiUASKwOoSKHFfXb5lvQgUgSKwJgRK3NcEezW6OgTKahEoAnsJlLjvJVHXIlAEisAGIlDivoEGs7pSBIpAEdhLoMR9L4mlXat0ESgCRWCmCZS4z/TwlHNFoAgUgf0jUOK+f9yqVhEoAkVgeQRWuXaJ+yoDLvNFoAgUgbUgUOK+FtSrzSJQBIrAKhMocV9lwGW+CKw9gfJgMxIocd+Mo159LgJFYMMTKHHf8ENcHSwCRWAzEihx34yjvnp9LstFoAjMCIES9xkZiHKjCBSBIrCSBErcV5Jm2SoCRaAIzAiBdSvuM8Kv3CgCRaAIzCSBEveZHJZyqggUgSKwPAIl7svjV7WLQBFYtwQ2tuMl7ht7fKt3RaAIbFICJe6bdOCr20WgCGxsAiXuG3t8q3ezQaC8KAIHnECJ+wFHXg0WgSJQBFafQIn76jOuFopAESgCB5xAifsBR766DZb1IlAEikASKHFPCvUpAkWgCGwwAiXuG2xAqztFoAgUgSSw/+KetetTBIpAESgCM0mgxH0mh6WcKgJFoAgsj0CJ+/L4Ve0iUAT2n0DVXEUCJe6rCLdMF4EiUATWikCJ+1qRr3aLQBEoAqtIoMR9FeGW6dkhUJ4Ugc1GoMR9s4149bcIFIFNQaDEfVMMc3WyCBSBzUagxH2lR7zsFYEiUARmgECJ+wwMQrlQBIpAEVhpAiXuK0207BWBIlAElkdgRWqXuK8IxjJSBIpAEZgtAiXuszUe5U0RKAJFYEUIlLivCMYyUgTWJ4HyeuMSKHHfuGNbPSsCRWATEyhx38SDX10vAkVg4xIocd+4YztbPStvikAROKAEStwPKO5qrAgUgSJwYAiUuB8YztVKESgCReCAEtiA4n5A+VVjRaAIFIGZJFDiPpPDUk4VgSJQBJZHoMR9efyqdhEoAhuQwEboUon7RhjF6kMRKAJF4GEEStwfBqRui0ARKAIbgUCJ+0YYxerD+iVQnheBVSJQ4r5KYMtsESgCRWAtCZS4ryX9arsIFIEisEoEStxXCezsmS2PikAR2EwEStw302hXX4tAEdg0BErcN81QV0eLQBHYTARWQ9w3E7/qaxEoAkVgJgmUuM/ksJRTRaAIFIHlEShxXx6/ql0EisBqECibyyZQ4r5shGWgCBSBIjB7BErcZ29MyqMiUASKwLIJlLgvG2EZWN8EyvsisDEJlLhvzHGtXhWBIrDJCZS4b/IJUN0vAkVgYxIocT9w41otFYEiUAQOGIES9wOGuhoqAkWgCBw4AiXuB451tVQEikARWB6BJdQucV8CrCpaBIpAEVgvBErc18tIlZ9FoAgUgSUQKHFfAqwqWgQ2D4Hq6XonUOK+3kew/C8CRaAILECgxH0BKJVUBIpAEVjvBErc1/sIrn//qwdFoAisAoES91WAWiaLQBEoAmtNoMR9rUeg2i8CRaAIrAKBTSXuq8CvTBaBIlAEZpJAiftMDks5VQSKQBFYHoES9+Xxq9pFoAhsKgLrp7Ml7utnrMrTIlAEisA+Eyhx32dUVbAIFIEisH4IlLivn7EqTzcXgeptEVgWgRL3ZeGrykWgCBSB2SRQ4j6b41JeFYEiUASWRaDEfVn4Nkbl6kURKAIbj0CJ+8Yb0+pRESgCRUAl7jUJikARKAIbkMCBFfcNCLC6VASKQBGYRQIl7rM4KuVTESgCRWCZBErclwmwqheBInBACVRj+0igxH0fQVWxIlAEisB6IlDivp5Gq3wtAkWgCOwjgRL3fQRVxTYfgepxEVjPBErc1/Pole9FoAgUgSkEStyngKnkIlAEisB6JlDiPgujVz4UgSJQBFaYQIn7CgMtc0WgCBSBWSBQ4j4Lo1A+FIEiUASWR+ARtUvcH4GkEopAESgC659Aifv6H8PqQREoAkXgEQRK3B+BpBKKQBFYjEDlrQ8CJe7rY5zKyyJQBIrAkgiUuC8JVxUuAkWgCKwPAiXu62OcNqeX1esiUAT2m0CJ+36jq4pFoAgUgdklUOI+u2NTnhWBIlAE9ptAifuArk5FoAgUgY1FoMR9Y41n9aYIFIEiMBAocR8w1KkIFIEisDwCs1a7xH3WRqT8KQJFoAisAIES9xWAWCaKQBEoArNGoMR91kak/CkCj0ag8ovAPhAocd8HSFWkCBSBIrDeCJS4r7cRK3+LQBEoAvtAoMR9HyBt3iLV8yJQBNYrgRL39Tpy5XcRKAJFYBECJe6LwKmsIlAEisB6JTAr4r5e+ZXfRaAIFIGZJFDiPpPDUk4VgSJQBJZHoMR9efyqdhEoArNCoPx4CIES94fgqJsiUASKwMYgUOK+McaxelEEikAReAiBEveH4KibIrAvBKpMEZh9AiXusz9G5WERKAJFYMkEStyXjKwqFIEiUARmn0CJ+2yPUXlXBIpAEdgvAiXu+4WtKhWBIlAEZptAiftsj095VwSKQBHYLwL3i/t+1a5KRaAIFIEiMJMEStxncljKqSJQBIrA8giUuC+PX9UuAkXgfgIVmSUCJe6zNBrlSxEoAkVghQiUuK8QyDJTBIpAEZglAiXuszQa5cu+EqhyRaAIPAqBEvdHAVTZRaAIFIH1SKDEfT2OWvlcBIpAEXgUAiXujwKosotAESgC65FAift6HLXyuQgUgSLwKARK3B8FUGUXgSJQBJZHYG1ql7ivDfdqtQgUgSKwqgRK3FcVbxkvAkWgCKwNgRL3teFerRaB1SBQNovA/QRK3O9HUZEiUASKwMYhUOK+ccayelIEikARuJ9Aifv9KCqyFAJVtggUgdkm8P8HAAD//2ynYmEAAAAGSURBVAMApMBDshv/vRoAAAAASUVORK5CYII=" alt="Claro"></div>
+    <div class="brandDividerV19"></div>
+    <div class="brandTextV19">
+      <h1>Gestión Comercial</h1>
+      <div>Control diario · Resumen mensual · Gerencia</div>
+    </div>
+  </div>
+  <div class="brandUploadV19 autoSyncV23">
+  <input id="file" type="file" accept=".xlsx,.xls" hidden>
+  <div class="lastUpdateV23" id="lastUpdateV23">Última actualización: —</div>
+  <div class="syncButtonsV23">
+    <button class="primary" id="refreshOneDriveV23" type="button">↻ Actualizar</button>
+    <button class="manualV23" type="button" onclick="file.click()">📄 Cargar Excel manualmente</button>
+  </div>
+</div>
+</header>
+<main>
+<div class="tabs" id="mainModes" style="margin-top:0">
+<button class="btn tab modebtn active" data-mode="commercial">📅 Control Diario</button>
+<button class="btn tab modebtn" data-mode="production">📊 Mensual</button>
+<button class="btn tab modebtn" data-mode="economic">🔒 Gerencia</button>
+</div>
+<div id="modeHelp" style="display:none"></div>
+<div id="notice" style="display:none"></div>
+<div class="filters">
+<div id="filterMonth"><div class="label">Mes</div><select id="month"></select></div>
+<div id="filterWeekMgmt"><div class="label">Semana</div><select id="mgmtWeek"><option value="">Todo el mes</option><option value="1">Semana 1 · 1–7</option><option value="2">Semana 2 · 8–14</option><option value="3">Semana 3 · 15–21</option><option value="4">Semana 4 · 22–28</option><option value="5">Semana 5 · 29–fin</option></select></div>
+<div id="filterSup"><div class="label">Supervisor</div><select id="sup"></select></div>
+<div id="filterSeller"><div class="commercial-extra-filter label">Vendedor</div><select id="seller"></select></div>
+<div id="filterStatus"><div class="commercial-extra-filter label">Estado</div><select id="status"></select></div>
+<div id="filterZone"><div class="label">Zona</div><select id="zone"></select></div>
+<div id="filterMode"><div class="commercial-extra-filter label">Modalidad</div><select id="mode"></select></div>
+<div id="filterContract"><div class="commercial-extra-filter label">Contrato</div><select id="contract"><option value="">Todos</option><option>PLANILLA</option><option>RRHH</option></select></div>
+<div style="display:flex;align-items:end"><button class="ghost" style="width:100%" onclick="resetFilters()">Limpiar filtros</button></div>
+</div>
+<div class="context" id="ctx">Sin archivo cargado.</div>
+<div id="supervisorGoalSummary" style="display:none"></div>
+
+<div class="kpis">
+<div class="card kpi" id="cardIngresadas"><div class="t" id="labIngresadas">Ingresadas</div><div class="v" id="kIngresadas">0</div><div class="s" id="subIngresadas">Según fecha de ingreso</div></div>
+<div class="card kpi" id="cardInst"><div class="t">Instaladas</div><div class="v green" id="kInst">0</div><div class="s">Producción final</div></div>
+<div class="card kpi" id="kpiGoal"><div class="t">Meta mensual</div><div class="v red" id="kMeta">0 / 440</div><div class="progress"><div class="bar" id="pMeta"></div></div><div class="s">Editable por mes</div><div style="margin-top:9px"><button class="ghost" id="editGoalDaily" type="button" style="padding:7px 10px;font-size:12px;width:100%">✏️ Editar meta</button></div></div>
+<div class="card kpi" id="kpiMissing"><div class="t">Faltan para meta</div><div class="v amber" id="kFaltan">440</div><div class="s">Según meta del mes seleccionado</div></div>
+<div class="card kpi moneyOnly"><div class="t">Factor Base pagable</div><div class="v" id="kFactor">S/ 0.00</div><div class="s">Cargo fijo solo instalado</div></div>
+<div class="card kpi" id="kpiClose"><div class="t">% de cierre</div><div class="v" id="kCierre">0%</div><div class="s">Instaladas / ingresadas</div></div><div class="card kpi" id="monthlyRejectedTop" style="display:none"><div class="t">Rechazadas</div><div class="v red" id="monthlyRejectedCount">0</div><div class="s">Del mes seleccionado</div></div><div class="card kpi" id="cardBaseSupervisor" style="display:none"><div class="t">BASE POR SUPERVISOR</div><div class="v" id="kBaseSupervisor">0.00</div><div class="s" id="kBaseSupervisorSub">Meta 20 ÷ supervisores</div></div>
+</div>
+
+
+<div id="mgmtViewBanner" class="card" style="display:none;margin:14px 0 0;padding:13px 16px;border-left:5px solid #e30613"><b id="mgmtViewTitle">VISTA MENSUAL</b><div class="sub" id="mgmtViewSub" style="margin-top:3px">Todos los indicadores corresponden al mes seleccionado.</div></div>
+
+<div id="gerenciaKpis">
+ <div class="card gkpi" id="gProdCard"><div class="t">Producción</div><div class="v" id="gProd">0</div><div class="s" id="gProdSub">Instaladas del período</div></div>
+ <div class="card gkpi" id="gPayCard"><div class="t">Instalaciones pagables</div><div class="v" id="gPay">0</div><div class="s">INSTALADO + cargo fijo mayor a S/ 0</div></div>
+ <div class="card gkpi" id="gMonthGoalCard"><div class="t">Meta mensual</div><div class="v" id="gMonthGoal">0 / 440</div><div class="s" id="gMonthGoalSub">Cumplimiento del mes</div><span class="mgmt-pill" id="gMonthGoalPill">—</span></div>
+ <div class="card gkpi" id="gWeekGoalCard"><div class="t">Meta semanal</div><div class="v" id="gWeekGoal">0 / 88</div><div class="s" id="gWeekGoalSub">Meta mensual ÷ 5 semanas</div><span class="mgmt-pill" id="gWeekGoalPill">—</span></div>
+ <div class="card gkpi" id="gFactorCard"><div class="t">Factor base pagable</div><div class="v" id="gFactor">S/ 0.00</div><div class="s" id="gFactorSub">0% del factor base objetivo</div><span class="mgmt-pill" id="gFactorPill">—</span></div>
+ <div class="card gkpi clickable" id="gNonPayCard" title="Clic para ver detalle"><div class="t">No pagables · ver detalle</div><div class="v" id="gNonPay">0</div><div class="s" id="gNonPaySub">Estimado no pagado: S/ 0.00</div><span class="mgmt-pill warn">VER DETALLE</span></div>
+ <div class="card gkpi" id="gBioFactorCard"><div class="t">Factor base · Biometría / Huellero</div><div class="v" id="gBioFactor">S/ 0.00</div><div class="s" id="gBioFactorSub">0 instalaciones pagables</div></div>
+ <div class="card gkpi" id="gGrabFactorCard"><div class="t">Factor base · Grabación</div><div class="v" id="gGrabFactor">S/ 0.00</div><div class="s" id="gGrabFactorSub">0 instalaciones pagables</div></div>
+</div>
+
+<div id="monthlyConfig" class="card" style="display:none;margin:14px 0">
+  <h2>📊 Producción mensual</h2>
+  <div class="sub" style="color:#6b7280;margin-bottom:12px">Producción según FECHA DE INSTALACIÓN del mes seleccionado.</div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>👤 Comparación de vendedores</h2>
+      <div class="grid2">
+        <div class="monthly-person best"><div class="label">🏆 Mejor vendedor</div><div class="monthly-name" id="bestSellerMonth">—</div><div class="monthly-count" id="bestSellerProd">0 instaladas</div></div>
+        <div class="monthly-person worst"><div class="label">Menor producción</div><div class="monthly-name" id="worstSellerMonth">—</div><div class="monthly-count" id="worstSellerProd">0 instaladas</div></div>
+      </div>
+      <div class="monthly-gap" id="sellerProdGap">Diferencia: 0 instalaciones</div>
+    </div>
+    <div class="card">
+      <h2>👥 Comparación de supervisores</h2>
+      <div class="grid2">
+        <div class="monthly-person best"><div class="label">🏆 Mejor supervisor</div><div class="monthly-name" id="bestSupMonth">—</div><div class="monthly-count" id="bestSupProd">0 instaladas</div></div>
+        <div class="monthly-person worst"><div class="label">Menor producción</div><div class="monthly-name" id="worstSupMonth">—</div><div class="monthly-count" id="worstSupProd">0 instaladas</div></div>
+      </div>
+      <div class="monthly-gap" id="supProdGap">Diferencia: 0 instalaciones</div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:14px">
+    <div class="card">
+      <h2>🔐 Tipo de validación del mes</h2>
+      <div class="grid2">
+        <div class="monthly-person"><div class="label">Biometría / Huellero</div><div class="monthly-count" id="monthlyBio">0</div><div class="s">Instaladas del mes</div></div>
+        <div class="monthly-person"><div class="label">Grabación</div><div class="monthly-count" id="monthlyGrab">0</div><div class="s">Instaladas del mes</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>📦 Productos más vendidos</h2>
+      <div id="packageSummaryMonth" class="product-bars" style="margin-top:12px"></div>
+      <div id="topPackageMonth" style="display:none">—</div>
+      <div id="topPackageCount" style="display:none">0 instaladas</div>
+    </div>
+  </div>
+
+  <div id="v4Rejected" style="display:none"></div>
+  <div id="v4Bio" style="display:none"></div>
+  <div id="rejectSummary" style="display:none"></div>
+  <div id="validationSummary" style="display:none"></div>
+  <div id="zoneSummaryV4" style="display:none"></div>
+  <input id="monthlyGoalInput" type="hidden" value="440">
+</div>
+
+<div id="managementConfig" class="card" style="display:none;margin:14px 0">
+ <h2>🔒 Gerencia — resumen económico</h2>
+ <div class="sub" id="mgmtPeriodText" style="color:#64748b;margin:4px 0 14px">Resumen del período seleccionado.</div>
+ <div class="card" style="padding:0;overflow:hidden">
+   <div style="padding:14px 16px 8px"><h2 style="margin:0">Resumen económico por vendedor</h2><div class="sub" style="color:#64748b;margin-top:5px">Comisiones calculadas con la regla mensual vigente de S/ 750 de base por vendedor.</div></div>
+   <div id="economicSellerSummary" class="tablewrap"></div>
+ </div>
+</div>
+<div id="nonPayModal" aria-hidden="true">
+ <div class="modalbox">
+  <div class="modalhead"><div><h2 style="margin:0">⚠️ Operaciones no pagables</h2><div class="sub" id="nonPayModalSub" style="color:#64748b;margin-top:4px"></div></div><button class="ghost" id="closeNonPay" type="button">✕ Cerrar</button></div>
+  <div id="nonPayDetail" class="tablewrap"></div>
+ </div>
+</div>
+<div class="tabs">
+<button class="btn tab active subtab" data-tab="general">Resumen</button>
+<button class="btn tab subtab" data-tab="daily">Seguimiento</button>
+<button class="btn tab subtab commercial-hide-tab" data-tab="supervisors">Supervisores</button>
+<button class="btn tab subtab commercial-hide-tab" data-tab="sellers">Vendedores</button>
+<button class="btn tab subtab" data-tab="detail">Operaciones</button>
+</div>
+
+<section id="general" class="section active">
+<div class="grid2">
+<div class="card"><h2 id="dailyChartTitle">Ventas ingresadas por día</h2><div class="sub" style="color:#6b7280;margin-bottom:8px">Muestra cuántas ventas fueron registradas cada día según FECHA DE INGRESO.</div><div class="chartbox"><canvas id="dailyChart"></canvas></div></div>
+<div class="card"><h2>Estado de operaciones</h2><div class="chartbox"><canvas id="stateChart"></canvas></div></div>
+</div>
+<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:14px;margin-bottom:8px">
+<label for="rankingDate" style="font-size:13px;font-weight:700">Fecha del ranking:</label>
+<input id="rankingDate" type="date" style="padding:8px 10px;border:1px solid #d1d5db;border-radius:10px;background:#fff">
+</div>
+<div class="grid2">
+<div class="card"><h2 id="supRankingTitle">Ranking diario de supervisores</h2><div class="sub" style="color:#6b7280;margin-bottom:8px">Ordenado de mayor a menor según ventas ingresadas en la fecha seleccionada.</div><div id="topSupervisors"></div></div>
+<div class="card"><h2 id="sellerRankingTitle">Ranking diario de vendedores</h2><div class="sub" style="color:#6b7280;margin-bottom:8px">Ordenado de mayor a menor según ventas ingresadas en la fecha seleccionada.</div><div id="topSellers"></div></div>
+</div>
+
+</section>
+
+<section id="daily" class="section">
+<div class="card daily-report-head" style="margin-bottom:12px">
+  <div style="display:flex;gap:12px;align-items:end;justify-content:space-between;flex-wrap:wrap">
+    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+      <div>
+        <div class="label">Vista del seguimiento</div>
+        <select id="followMode" style="min-width:125px">
+          <option value="daily">Diario</option>
+          <option value="weekly">Semanal</option>
+        </select>
+      </div>
+      <div id="followDayWrap">
+        <div class="label">Fecha del seguimiento</div>
+        <input id="reportDate" type="date">
+      </div>
+      <div id="followWeekWrap" style="display:none">
+        <div class="label">Semana del seguimiento</div>
+        <select id="reportWeek" style="min-width:170px">
+          <option value="1">Semana 1 · 1–7</option>
+          <option value="2">Semana 2 · 8–14</option>
+          <option value="3">Semana 3 · 15–21</option>
+          <option value="4">Semana 4 · 22–28</option>
+          <option value="5">Semana 5 · 29–fin</option>
+        </select>
+      </div>
+    </div>
+    <div style="font-size:12px;color:#6b7280;max-width:620px">
+      Seguimiento por <b>FECHA DE INGRESO</b>. La meta diaria necesaria se recalcula automáticamente según la meta mensual, el avance acumulado y los días laborables restantes (lunes a sábado).
+    </div>
+    <button class="btn ghost" onclick="setLatestDate()">Última fecha con datos</button>
+  </div>
+</div>
+
+<div class="dailytop">
+  <div class="card kpi"><div class="t" id="dInLabel">Ventas ingresadas</div><div class="v" id="dIn">0</div><div class="s" id="dInSub">En la fecha elegida</div></div>
+  <div class="card kpi"><div class="t">Vendedores con venta</div><div class="v green" id="dSell">0</div><div class="s" id="dSellSub">0 sin venta</div></div>
+  <div class="card kpi"><div class="t">Supervisores con venta</div><div class="v" id="dSup">0</div><div class="s" id="dSupSub">0 sin venta</div></div>
+  <div class="card kpi" id="dailyCompanyGoalCard"><div class="t" id="dGoalLabel">Meta diaria general</div><div class="v" id="dDailyGoal">0 / 0</div><div class="s" id="dDailyGoalSub">Ritmo necesario de todo el equipo</div></div>
+  <div class="card kpi"><div class="t">Meta mensual</div><div class="v" id="dMonthGoal">440</div><div class="s" id="dMonthProgress">0 acumuladas</div></div>
+</div>
+
+<div class="card">
+  <div class="panelhead">
+    <div class="label">REPORTE PARA COMPARTIR</div>
+    <h2 id="dailyTitle">Seguimiento diario</h2>
+    <div class="sub" id="dailySubtitle">Supervisor → vendedores → ventas del día</div>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Supervisor / Vendedor</th>
+          <th id="dSalesHead">Ventas del día</th>
+          <th id="dAvgHead">Promedio diario del mes</th>
+          <th id="dNeedHead">Meta diaria necesaria</th>
+          <th>Cumplimiento</th>
+          <th>Estado</th>
+        </tr>
+      </thead>
+      <tbody id="dailySupBody"></tbody>
+    </table>
+  </div>
+</div>
+
+</section>
+
+<section id="supervisors" class="section"><div class="card"><h2>Rendimiento por supervisor — actividad y cumplimiento de base</h2><div class="tablewrap"><table><thead><tr><th>Supervisor</th><th>Ingresadas</th><th>Prom./día</th><th>Vendedores activos hoy</th><th>Instaladas</th><th>Base proporcional</th><th>Cumplimiento base</th><th>Rechazadas</th><th>En ejecución</th><th>% cierre</th><th class="moneyCol">Factor Base</th><th>Hoy</th><th></th></tr></thead><tbody id="supBody"></tbody></table></div></div></section>
+<section id="sellers" class="section"><div class="card"><h2>Rendimiento por vendedor — clic para ver detalle</h2><div class="tablewrap"><table><thead><tr><th>Vendedor</th><th>Supervisor</th><th>Ingresadas</th><th>Prom./día</th><th>Instaladas</th><th>Meta individual</th><th>% cierre</th><th class="moneyCol">Factor Base</th><th>Hoy</th><th></th></tr></thead><tbody id="sellerBody"></tbody></table></div></div></section>
+<section id="detail" class="section"><div class="card"><h2>Detalle de operaciones</h2><div class="tablewrap"><table><thead><tr><th>F. ingreso</th><th>F. instalación</th><th>Cliente</th><th>Producto</th><th>Modalidad</th><th>Zona</th><th>Estado</th><th>Supervisor</th><th>Vendedor</th><th>OBS</th></tr></thead><tbody id="opsBody"></tbody></table></div><div class="footer">Se muestran hasta 500 filas para mantener el navegador fluido. Los indicadores usan todas las operaciones filtradas.</div></div></section>
+</main>
+
+
+<div id="goalEditModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;align-items:center;justify-content:center;padding:18px">
+  <div class="card" style="width:min(390px,100%);padding:20px">
+    <h2 style="margin-top:0">Editar meta mensual</h2>
+    <div class="label">Meta del mes seleccionado</div>
+    <input id="dailyGoalInput" type="number" min="0" step="1" style="width:100%;margin:7px 0 14px">
+    <div style="display:flex;gap:9px;justify-content:flex-end">
+      <button class="ghost" id="cancelDailyGoal" type="button">Cancelar</button>
+      <button class="btn" id="saveDailyGoal" type="button">Guardar meta</button>
+    </div>
+  </div>
+</div>
+
+<div class="drawer" id="drawer"><div class="panel"><button class="close btn" onclick="closeDrawer()">✕ Cerrar</button><div id="drawerContent"></div></div></div>
+
+<script>
+let rows=[], filtered=[], charts={}, currentMonth='', viewMode='commercial', personnel=[];
+const MONTHS=['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SETIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+const monthKey=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`:'';
+const monthLabel=k=>{if(!k)return '';let [y,m]=k.split('-').map(Number);return `${MONTHS[m-1]} ${y}`};
+const daysInMonth=k=>{if(!k)return [];let [y,m]=k.split('-').map(Number),n=new Date(y,m,0).getDate();return Array.from({length:n},(_,i)=>`${y}-${String(m).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`)};
+const $=id=>document.getElementById(id), clean=v=>(v??'').toString().replace(/\u00a0/g,' ').trim();
+const norm=v=>clean(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+const money=v=>'S/ '+Number(v||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
+function jsDate(v){
+ if(v instanceof Date && !isNaN(v)) return v;
+ if(typeof v==='number'){let o=XLSX.SSF.parse_date_code(v);return o?new Date(o.y,o.m-1,o.d):null}
+ let s=clean(v); if(!s)return null;
+ let m=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/); if(m){let y=+m[3];if(y<100)y+=2000;return new Date(y,+m[2]-1,+m[1])}
+ let d=new Date(s);return isNaN(d)?null:d
+}
+const iso=d=>d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:'';
+const fmt=d=>d?d.toLocaleDateString('es-PE'):'—';
+const installed=r=>norm(r.estado)==='INSTALADO';
+const personInfo=name=>personnel.find(p=>norm(p.nombre)===norm(name))||null;
+const contractOf=r=>{let p=personInfo(r.asesor);return p?p.contrato:''};
+function rejectCategory(r){
+ const s=norm(r.obs);
+ if(!s)return 'OTROS / REVISAR';
+ if(/RIESGO|CREDITICIO|TRANSACCION NO AUTORIZADA|VALIDACION/.test(s))return 'RIESGO / VALIDACIÓN';
+ if(/ACOMETIDA|COBERTURA|PUERTO|FACILIDAD TECNICA|FACTIBILIDAD|POSTE/.test(s))return 'TÉCNICO / INSTALACIÓN';
+ if(/NUMERO INCORRECTO|DATOS INCORRECT|NO HA CONTRATADO|NO CONTRATO|TRASLADO/.test(s))return 'COMERCIAL';
+ if(/NO DESEA|VIAJE|ECONOMIC|OTRO OPERADOR|NO CONTEST|NO RESPOND|RECHAZO LA INSTALACION/.test(s))return 'CLIENTE';
+ return 'OTROS / REVISAR';
+}
+function validationType(r){
+ const s=norm(r.modalidad);
+ if(/BIO|HUELLERO|HUELLA/.test(s))return 'BIOMETRÍA / HUELLERO';
+ if(/GRAB/.test(s))return 'GRABACIÓN';
+ return 'POR CLASIFICAR';
+}
+function productFamily(r){
+ const s=norm(r.producto);
+ if(!s)return 'POR CLASIFICAR';
+ if(/3\s*PLAY|TRIPLE/.test(s))return '3 Play';
+ if((/2\s*PLAY/.test(s)&&/TV|TELEV/.test(s))||(/INTERNET/.test(s)&&/TV|TELEV/.test(s)))return '2 Play Internet + TV';
+ if((/2\s*PLAY/.test(s)&&/TELEF|FIJO/.test(s))||(/INTERNET/.test(s)&&/TELEF/.test(s)))return '1 Play / 2 Play Internet + Teléfono';
+ if(/200/.test(s)&&(/1\s*PLAY|INTERNET|FIBRA/.test(s)))return '1 Play (plan 200 Mbps)';
+ return 'POR CLASIFICAR';
+}
+function commissionRate(r){
+ const f=productFamily(r), bio=validationType(r)==='BIOMETRÍA / HUELLERO';
+ const map={'1 Play (plan 200 Mbps)':[.90,1.00],'1 Play / 2 Play Internet + Teléfono':[1.40,1.50],'2 Play Internet + TV':[1.50,1.60],'3 Play':[1.50,1.60]};
+ return map[f]?map[f][bio?1:0]:null;
+}
+function monthGoal(mk){return Number(localStorage.getItem('claro_goal_month_'+(mk||'ALL'))||440)}
+function mgmtGoal(key,mk){return localStorage.getItem('claro_'+key+'_'+(mk||'ALL'))||''}
+
+function goalLevel(n){return n>=20?'ok':n>=10?'mid':'low'}
+function goalColor(n){return n>=20?'ind-ok':n>=10?'ind-mid':'ind-low'}
+function goalLabel(n){return n>=20?'🟢 META ALCANZADA':n>=10?'🟠 EN AVANCE':'🔴 BAJO'}
+function goalPill(n){return `<span class="goalpill ${goalLevel(n)}">${n}/20 · ${goalLabel(n)}</span>`}
+function businessDaysElapsed(mk){
+ let end=new Date(), start;
+ if(mk){let [y,m]=mk.split('-').map(Number);start=new Date(y,m-1,1);let last=new Date(y,m,0);if(end<start)return 0;if(end>last)end=last;}
+ else {let dates=activeRows().map(r=>viewMode==='commercial'?r.ingreso:r.instalacion).filter(Boolean).sort((a,b)=>a-b);if(!dates.length)return 0;start=new Date(dates[0].getFullYear(),dates[0].getMonth(),dates[0].getDate());}
+ let n=0,d=new Date(start);d.setHours(0,0,0,0);let e=new Date(end);e.setHours(0,0,0,0);
+ while(d<=e){if(d.getDay()!==0)n++;d.setDate(d.getDate()+1)} return n;
+}
+function avgDay(n){let d=businessDaysElapsed($('month').value);return d?(n/d).toFixed(2):'0.00'}
+function supervisorNames(){
+ return [...new Set(rows.map(r=>r.supervisor).filter(Boolean))];
+}
+function supervisorBase(){
+ const n=supervisorNames().length;
+ return n?20/n:20;
+}
+function basePct(inst){return supervisorBase()?inst/supervisorBase()*100:0}
+function baseLevel(inst){
+ const p=basePct(inst); return p>=100?'ok':p>=75?'mid':'low';
+}
+function basePill(inst){
+ const b=supervisorBase(), p=basePct(inst);
+ return `<span class="goalpill ${baseLevel(inst)}">${inst}/${b.toFixed(2)} · ${p.toFixed(0)}%</span>`;
+}
+function teamActivity(list){
+ const sellers=[...new Set(list.map(r=>r.asesor).filter(Boolean))];
+ const today=iso(new Date());
+ const active=[...new Set(list.filter(r=>iso(r.ingreso)===today).map(r=>r.asesor).filter(Boolean))];
+ return {total:sellers.length,active:active.length,inactive:Math.max(0,sellers.length-active.length),pct:sellers.length?active.length/sellers.length*100:0}
+}
+
+
+const rejected=r=>norm(r.estado).includes('RECHAZ');
+const executing=r=>norm(r.estado).includes('EJEC');
+function findHeaderIndex(headers, names){for(const n of names){let i=headers.findIndex(h=>norm(h)===norm(n));if(i>=0)return i}return -1}
+function val(a,i){return i>=0?a[i]:''}
+
+async function loadExcelBufferV23(data,sourceName){
+ $('notice').innerHTML='⏳ Leyendo Excel...';
+ try{
+  const wb=XLSX.read(data,{type:'array',cellDates:true});
+  rows=[];
+  personnel=[];
+  for(const sn of wb.SheetNames){
+   const ws=wb.Sheets[sn];
+   if(/PERSONAL|VENDEDORES|MAESTRO/.test(norm(sn))){
+    let parr=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
+    if(parr.length){
+     let ph=parr[0], ni=findHeaderIndex(ph,['NOMBRE COMPLETO','NOMBRE','VENDEDOR','PERSONAL']), ri=findHeaderIndex(ph,['ROL','CARGO','TIPO PERSONAL']), ci=findHeaderIndex(ph,['TIPO DE CONTRATO','CONTRATO','TIPO CONTRATO']);
+     for(let j=1;j<parr.length;j++){let a=parr[j], nombre=clean(val(a,ni));if(nombre)personnel.push({nombre,rol:clean(val(a,ri)),contrato:norm(val(a,ci))});}
+    }
+    continue;
+   }
+   // Evita el rango fantasma de 1,048,576 filas: buscamos la última fila con celdas reales.
+   let maxR=0,maxC=0;
+   Object.keys(ws).forEach(k=>{if(k[0]==='!')return;let c=XLSX.utils.decode_cell(k);if(c.r>maxR)maxR=c.r;if(c.c>maxC)maxC=c.c});
+   if(maxR<1)continue;
+   const ref=XLSX.utils.encode_range({s:{r:0,c:0},e:{r:maxR,c:Math.min(maxC,60)}});
+   const arr=XLSX.utils.sheet_to_json(ws,{header:1,range:ref,defval:'',raw:true});
+   if(!arr.length)continue;
+   const h=arr[0];
+   const ix={
+    ingreso:findHeaderIndex(h,['FECH INGRESO','FECHA INGRESO','FECHA DE INGRESO']),
+    cliente:findHeaderIndex(h,['NOMBRE Y APELLIDO DEL CLIENTE','CLIENTE']),
+    producto:findHeaderIndex(h,['PRODUCTO']),
+    cargo:findHeaderIndex(h,['CARGO FIJO']),
+    modalidad:findHeaderIndex(h,['MODALIDAD']),
+    estado:findHeaderIndex(h,['ESTADO']),
+    inst:findHeaderIndex(h,['FECHA DE INST','FECHA INSTALACION','FECHA DE INSTALACION']),
+    asesor:findHeaderIndex(h,['ASESOR','VENDEDOR']),
+    supervisor:findHeaderIndex(h,['SUPERVISOR']),
+    zona:findHeaderIndex(h,['ZONA']),
+    obs:findHeaderIndex(h,['OBS','OBSERVACION','OBSERVACIONES'])
+   };
+   for(let i=1;i<arr.length;i++){
+    const a=arr[i], ingreso=jsDate(val(a,ix.ingreso)), cliente=clean(val(a,ix.cliente)), asesor=clean(val(a,ix.asesor));
+    if(!ingreso && !cliente && !asesor) continue;
+    let cargo=parseFloat(String(val(a,ix.cargo)).replace(',','.'))||0;
+    rows.push({sheet:sn,ingreso,instalacion:jsDate(val(a,ix.inst)),cliente,producto:clean(val(a,ix.producto)),cargo,modalidad:clean(val(a,ix.modalidad)),estado:clean(val(a,ix.estado)),asesor,supervisor:clean(val(a,ix.supervisor)),zona:clean(val(a,ix.zona)),obs:clean(val(a,ix.obs))});
+   }
+  }
+  $('notice').innerHTML=`✅ <b>${rows.length}</b> operaciones cargadas desde <b>${f.name}</b>. ${rows.some(r=>r.zona)?'ZONA detectada correctamente.':'No se encontró ZONA en este archivo; al cargar tu Excel actualizado aparecerá automáticamente.'}`;
+  initFilters(); setLatestDate(); apply();
+ }catch(err){throw err}
+}
+function stampUpdateV23(){
+ const d=new Date();
+ const txt=d.toLocaleDateString('es-PE',{day:'2-digit',month:'2-digit',year:'numeric'})+' · '+d.toLocaleTimeString('es-PE',{hour:'numeric',minute:'2-digit',hour12:true});
+ $('lastUpdateV23').textContent='Última actualización: '+txt;
+}
+async function loadFromOneDriveV23(manual=false){
+ const btn=$('refreshOneDriveV23');
+ const old=btn.textContent; btn.disabled=true; btn.textContent='↻ Actualizando...';
+ try{
+   const url='https://jlbcorporacioncompe-my.sharepoint.com/:x:/g/personal/zoila_quintana_jlbcorporacion_com_pe/IQAokIeF3SG2S7r_-TtBJU13AZtUmkkWr1fg5Qi1SNfCnxk?download=1' + (('https://jlbcorporacioncompe-my.sharepoint.com/:x:/g/personal/zoila_quintana_jlbcorporacion_com_pe/IQAokIeF3SG2S7r_-TtBJU13AZtUmkkWr1fg5Qi1SNfCnxk?download=1').includes('?')?'&':'?') + '_='+Date.now();
+   const res=await fetch(url,{method:'GET',cache:'no-store',credentials:'omit'});
+   if(!res.ok)throw new Error('HTTP '+res.status);
+   const data=await res.arrayBuffer();
+   await loadExcelBufferV23(data,'OneDrive');
+   stampUpdateV23();
+ }catch(err){
+   console.error('OneDrive automático:',err);
+   $('notice').style.display='block';
+   $('notice').innerHTML='⚠️ No se pudo leer OneDrive automáticamente en este navegador. Puedes usar <b>Cargar Excel manualmente</b> como respaldo.';
+ }finally{btn.disabled=false;btn.textContent=old}
+}
+$('file').addEventListener('change',async e=>{
+ const f=e.target.files[0];if(!f)return;
+ try{
+   const data=await f.arrayBuffer();
+   await loadExcelBufferV23(data,f.name);
+   stampUpdateV23();
+ }catch(err){
+   console.error(err);
+   $('notice').style.display='block';
+   $('notice').innerHTML='❌ No pude leer el Excel. Revisa que sea .xlsx/.xls y vuelve a intentar.';
+ }
+});
+$('refreshOneDriveV23').addEventListener('click',()=>loadFromOneDriveV23(true));
+setTimeout(()=>loadFromOneDriveV23(false),250);
+
+
+function uniq(key){return [...new Set(rows.map(r=>clean(r[key])).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'))}
+function fill(id,items,all){$(id).innerHTML=`<option value="">${all}</option>`+items.map(x=>`<option>${x}</option>`).join('')}
+function initFilters(){
+ const months=[...new Set(rows.flatMap(r=>[monthKey(r.ingreso),monthKey(r.instalacion)]).filter(Boolean))].sort();
+ $('month').innerHTML='<option value="">Todos los meses</option>'+months.map(k=>`<option value="${k}">${monthLabel(k)}</option>`).join('');
+ fill('sup',uniq('supervisor'),'Todos los supervisores');fill('seller',uniq('asesor'),'Todos los vendedores');fill('status',uniq('estado'),'Todos los estados');fill('zone',uniq('zona'),'Todas las zonas');fill('mode',uniq('modalidad'),'Todas las modalidades');
+ ['month','sup','seller','status','zone','mode','contract'].forEach(id=>$(id).onchange=apply);
+}
+function resetFilters(){['month','sup','seller','status','zone','mode','contract'].forEach(id=>$(id).value='');apply()}
+function apply(){
+ const mk=$('month').value;
+ filtered=rows.filter(r=>(!mk||monthKey(r.ingreso)===mk||(installed(r)&&monthKey(r.instalacion)===mk))&&(!$('sup').value||r.supervisor===$('sup').value)&&(!$('seller').value||r.asesor===$('seller').value)&&(!$('status').value||r.estado===$('status').value)&&(!$('zone').value||r.zona===$('zone').value)&&(!$('mode').value||r.modalidad===$('mode').value)&&(!$('contract').value||contractOf(r)===$('contract').value));
+ renderAll();
+}
+function periodSets(){
+ const mk=$('month').value;
+ const base=filtered;
+ const entered=mk?base.filter(r=>monthKey(r.ingreso)===mk):base;
+ const paid=base.filter(r=>installed(r)&&(!mk||monthKey(r.instalacion)===mk));
+ return {entered,paid};
+}
+function activeRows(){
+ const {entered,paid}=periodSets();
+ return viewMode==='commercial'?entered:paid;
+}
+
+function enforceCommercialVisibility(){
+ document.body.classList.toggle('mode-commercial',viewMode==='commercial');
+ document.querySelectorAll('.commercial-extra-filter').forEach(el=>el.style.display=viewMode==='commercial'?'none':'');
+ document.querySelectorAll('button[data-tab="supervisors"],button[data-tab="sellers"]').forEach(el=>el.style.display=viewMode==='commercial'?'none':'');
+}
+
+function renderAll(){
+ enforceCommercialVisibility();
+ const {entered,paid}=periodSets();
+ const economic=viewMode==='economic', production=viewMode==='production';
+ document.body.classList.toggle('meeting',!economic);
+ let primary=production||economic?paid:entered;
+ let factor=paid.reduce((sum,r)=>sum+r.cargo,0);
+ if(viewMode==='commercial'){
+   $('kIngresadas').textContent=entered.length; $('labIngresadas').textContent='Ingresadas'; $('subIngresadas').textContent='Actividad del período';
+   $('kInst').textContent=entered.filter(installed).length;
+ } else {
+   $('kIngresadas').textContent=paid.length; $('labIngresadas').textContent=economic?'Instalaciones pagables':'Producción final'; $('subIngresadas').textContent='Por fecha de instalación';
+   $('kInst').textContent=paid.length;
+ }
+ $('kMeta').textContent=`${paid.length} / ${monthGoal($('month').value)}`;
+ $('kMeta').className='v '+goalColor(paid.length);
+ const faltan=Math.max(0,monthGoal($('month').value)-paid.length), sobre=Math.max(0,paid.length-20);
+ $('kFaltan').textContent=faltan>0?faltan:`+${sobre}`;
+ $('kFaltan').className='v '+goalColor(paid.length);
+ $('kFaltan').nextElementSibling.textContent=faltan>0?'Meta mensual editable':(sobre>0?'Sobre la meta':'Meta alcanzada');
+ $('kFactor').textContent=money(factor);
+ $('kCierre').textContent=(entered.length?paid.length/entered.length*100:0).toFixed(1)+'%';
+ $('pMeta').style.width=Math.min(100,paid.length/monthGoal($('month').value)*100)+'%';
+ $('pMeta').className='bar ind-bg-'+goalLevel(paid.length);
+ let bits=[]; if($('month').value)bits.push(monthLabel($('month').value)); if($('sup').value)bits.push($('sup').value);if($('seller').value)bits.push($('seller').value);if($('zone').value)bits.push($('zone').value);if($('mode').value)bits.push($('mode').value);
+ const modeName=viewMode==='commercial'?'CONTROL DIARIO':viewMode==='production'?'PRODUCCIÓN FINAL':'ECONÓMICO';
+ $('ctx').innerHTML=`<b>${modeName}</b> · ${bits.length?bits.join(' · '):'Todos los datos'} · ${primary.length} operaciones del período`;
+ const sn=supervisorNames().length, sb=supervisorBase();
+ const supStats=groupStats(paid,'supervisor'), cumplen=supStats.filter(g=>g.inst>=sb).length;
+ const goalSummary=$('supervisorGoalSummary');
+ if(goalSummary) goalSummary.style.display='none';
+ $('kBaseSupervisor').textContent=sb.toFixed(2);
+ $('kBaseSupervisorSub').textContent=`20 ÷ ${sn} supervisores · ${cumplen}/${sn} cumplen`;
+ $('kBaseSupervisor').className='v '+(cumplen===sn&&sn>0?'ind-ok':cumplen>0?'ind-mid':'ind-low');
+ renderCharts();renderSupervisors();renderSellers();renderOps();renderDaily();renderTop();
+}
+function countBy(list,keyfn){let m={};list.forEach(r=>{let k=keyfn(r)||'SIN DATO';m[k]=(m[k]||0)+1});return m}
+function chart(id,type,labels,data,label){
+ if(charts[id])charts[id].destroy();
+ charts[id]=new Chart($(id),{type,data:{labels,datasets:[{label,data}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:type!=='bar'}},scales:type==='bar'?{y:{beginAtZero:true,ticks:{precision:0}}}:{}}});
+}
+function renderCharts(){
+ const mk=$('month').value, sets=periodSets(), entered=sets.entered, paid=sets.paid, list=activeRows();
+ const production=viewMode!=='commercial';
+ let dates=mk?daysInMonth(mk):[...new Set(list.map(r=>iso(production?r.instalacion:r.ingreso)).filter(Boolean))].sort();
+ let vals=countBy(list,r=>iso(production?r.instalacion:r.ingreso));
+ if(charts.dailyChart)charts.dailyChart.destroy();
+ const dailyData=dates.map(d=>vals[d]||0);
+ const dailyLabelsPlugin={id:'dailyLabels',afterDatasetsDraw(c){const ctx=c.ctx,meta=c.getDatasetMeta(0);ctx.save();ctx.textAlign='center';ctx.textBaseline='bottom';ctx.font='700 11px system-ui';ctx.fillStyle='#334155';meta.data.forEach((p,i)=>ctx.fillText(String(dailyData[i]),p.x,p.y-5));ctx.restore();}};
+ charts.dailyChart=new Chart($('dailyChart'),{type:'line',data:{labels:dates.map(d=>mk?String(Number(d.slice(-2))):d),datasets:[{label:production?'Instaladas':'Ingresadas',data:dailyData}]},plugins:[dailyLabelsPlugin],options:{responsive:true,maintainAspectRatio:false,plugins:{title:{display:!!mk,text:mk?`Días de ${monthLabel(mk)}`:''}},scales:{y:{beginAtZero:true,ticks:{precision:0,stepSize:1}}}}});
+ let st=countBy(list,r=>r.estado),stL=Object.keys(st),stV=Object.values(st);
+ if(charts.stateChart)charts.stateChart.destroy();
+ charts.stateChart=new Chart($('stateChart'),{type:'doughnut',data:{labels:stL,datasets:[{label:'Operaciones',data:stV,backgroundColor:stL.map(x=>norm(x).includes('RECHAZ')?'#ef4444':norm(x).includes('INSTAL')?'#38bdf8':'#94a3b8')}]},options:{responsive:true,maintainAspectRatio:false}});
+ if($('zoneChart')){let zn=countBy(list,r=>r.zona||'SIN ZONA');chart('zoneChart','doughnut',Object.keys(zn),Object.values(zn),'Operaciones')}
+ if($('modeChart')){let md=countBy(list,r=>r.modalidad||'SIN MODALIDAD');chart('modeChart','doughnut',Object.keys(md),Object.values(md),'Operaciones')}
+}function groupStats(list,key){
+ let m={};list.forEach(r=>{let k=clean(r[key])||'SIN ASIGNAR';if(!m[k])m[k]={name:k,rows:[]};m[k].rows.push(r)});
+ return Object.values(m).map(g=>{let ins=g.rows.filter(installed),rej=g.rows.filter(rejected),exe=g.rows.filter(executing);return {...g,ing:g.rows.length,inst:ins.length,rej:rej.length,exe:exe.length,factor:ins.reduce((s,r)=>s+r.cargo,0),close:g.rows.length?ins.length/g.rows.length*100:0}}).sort((a,b)=>b.inst-a.inst||b.ing-a.ing)
+}
+function badgeState(n){return n>0?'<span class="badge ok">🟢 CON INGRESOS</span>':'<span class="badge bad">🔴 SIN INGRESOS</span>'}
+function latestIso(){let a=rows.map(r=>iso(r.ingreso)).filter(Boolean).sort();return a[a.length-1]||''}
+function renderSupervisors(){
+ let today=iso(new Date()), list=activeRows(), gs=groupStats(list,'supervisor'), production=viewMode!=='commercial', sb=supervisorBase();
+ $('supBody').innerHTML=gs.map(g=>{
+   let d=g.rows.filter(r=>iso(production?r.instalacion:r.ingreso)===today).length, ta=teamActivity(g.rows);
+   let activity=viewMode==='commercial'?`<span class="goalpill ${ta.pct>=70?'ok':ta.pct>=40?'mid':'low'}">${ta.active}/${ta.total} · ${ta.pct.toFixed(0)}%</span>`:'—';
+   let base=sb.toFixed(2);
+   let compliance=basePill(g.inst);
+   return `<tr class="clickable" onclick="openPerson('supervisor',${JSON.stringify(g.name).replace(/"/g,'&quot;')})"><td><b>${g.name}</b></td><td>${g.ing}</td><td><b>${avgDay(viewMode==='commercial'?g.ing:g.inst)}</b></td><td>${activity}</td><td>${g.inst}</td><td>${base}</td><td>${compliance}</td><td>${g.rej}</td><td>${g.exe}</td><td>${g.close.toFixed(1)}%</td><td class="moneyCell">${money(g.factor)}</td><td>${badgeState(d)}</td><td>Ver detalle →</td></tr>`
+ }).join('')||'<tr><td colspan="13" class="empty">Sin datos</td></tr>';
+}
+function renderSellers(){
+ let today=iso(new Date()), list=activeRows(), gs=groupStats(list,'asesor'), production=viewMode!=='commercial';
+ $('sellerBody').innerHTML=gs.map(g=>{let sup=g.rows.find(r=>r.supervisor)?.supervisor||'—',d=g.rows.filter(r=>iso(production?r.instalacion:r.ingreso)===today).length;return `<tr class="clickable" onclick="openPerson('asesor',${JSON.stringify(g.name).replace(/"/g,'&quot;')})"><td><b>${g.name}</b></td><td>${sup}</td><td>${g.ing}</td><td><b>${avgDay(viewMode==='commercial'?g.ing:g.inst)}</b></td><td>${g.inst}</td><td>—</td><td>${g.close.toFixed(1)}%</td><td class="moneyCell">${money(g.factor)}</td><td>${badgeState(d)}</td><td>Ver detalle →</td></tr>`}).join('')||'<tr><td colspan="10" class="empty">Sin datos</td></tr>';
+}
+function renderOps(){
+ let list=activeRows();
+ $('opsBody').innerHTML=list.slice(0,500).map(r=>`<tr><td>${fmt(r.ingreso)}</td><td>${fmt(r.instalacion)}</td><td>${r.cliente||'—'}</td><td>${r.producto||'—'}</td><td>${r.modalidad||'—'}</td><td>${r.zona||'—'}</td><td>${stateBadge(r.estado)}</td><td>${r.supervisor||'—'}</td><td>${r.asesor||'—'}</td><td>${r.obs||'—'}</td></tr>`).join('')||'<tr><td colspan="10" class="empty">Sin operaciones</td></tr>';
+}
+function stateBadge(s){let c=installed({estado:s})?'ok':norm(s).includes('RECHAZ')?'bad':norm(s).includes('EJEC')?'wait':'neutral';return `<span class="badge ${c}">${s||'SIN ESTADO'}</span>`}
+function setLatestDate(){
+ const mk=$('month').value;
+ let ds=rows.flatMap(r=>[iso(r.ingreso),installed(r)?iso(r.instalacion):'']).filter(d=>d&&(!mk||d.startsWith(mk))).sort();
+ $('reportDate').value=ds[ds.length-1]||(mk?daysInMonth(mk)[0]:latestIso());renderDaily()
+} $('reportDate').addEventListener('change',renderDaily);
+$('month').addEventListener('change',()=>setLatestDate());
+function businessDaysBetween(startDate,endDate){
+ let a=new Date(startDate.getFullYear(),startDate.getMonth(),startDate.getDate());
+ let b=new Date(endDate.getFullYear(),endDate.getMonth(),endDate.getDate()),n=0;
+ while(a<=b){if(a.getDay()!==0)n++;a.setDate(a.getDate()+1)}
+ return n;
+}
+function dailyNeedForDate(d){
+ const mk=d.slice(0,7), goal=monthGoal(mk);
+ const [y,m,day]=d.split('-').map(Number), chosen=new Date(y,m-1,day), monthEnd=new Date(y,m,0);
+ const before=rows.filter(r=>r.ingreso && monthKey(r.ingreso)===mk && iso(r.ingreso)<d && (!$('zone').value||r.zona===$('zone').value)).length;
+ const remaining=Math.max(0,goal-before);
+ const supNames=[...new Set(rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(!$('zone').value||r.zona===$('zone').value)).map(r=>r.supervisor).filter(Boolean))];
+ const daysLeft=Math.max(1,businessDaysBetween(chosen,monthEnd));
+ const dailyGeneral=remaining/daysLeft;
+ return {goal,before,remaining,supCount:Math.max(1,supNames.length),daysLeft,dailyGeneral,perSup:dailyGeneral/Math.max(1,supNames.length)};
+}
+function dailyLevel(actual,target){
+ if(target<=0)return actual>0?'ok':'mid';
+ const p=actual/target*100;
+ return p>=100?'ok':p>=70?'mid':'low';
+}
+function dailyState(actual,target){
+ const lv=dailyLevel(actual,target);
+ const label=lv==='ok'?'🟢 EN RITMO':lv==='mid'?'🟡 CERCA':'🔴 BAJO';
+ return `<span class="daily-status ${lv}">${label}</span>`;
+}
+function sellerUniverseForSupervisor(name,mk){
+ return [...new Set(rows.filter(r=>monthKey(r.ingreso)===mk && r.supervisor===name && (!$('zone').value||r.zona===$('zone').value)).map(r=>r.asesor).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+}
+function renderDailyOriginal(){
+ let d=$('reportDate').value;if(!d)return;
+ const mk=d.slice(0,7), zone=$('zone').value;
+ let monthRows=rows.filter(r=>monthKey(r.ingreso)===mk&&(!zone||r.zona===zone));
+ let entered=monthRows.filter(r=>iso(r.ingreso)===d);
+ let need=dailyNeedForDate(d);
+ let supNames=[...new Set(monthRows.map(r=>r.supervisor).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+ let sellerNames=[...new Set(monthRows.map(r=>r.asesor).filter(Boolean))];
+ let activeSellers=new Set(entered.map(r=>norm(r.asesor)).filter(Boolean));
+ let activeSups=new Set(entered.map(r=>norm(r.supervisor)).filter(Boolean));
+
+ $('dIn').textContent=entered.length;
+ $('dSell').textContent=activeSellers.size;
+ $('dSellSub').textContent=`${Math.max(0,sellerNames.length-activeSellers.size)} sin venta`;
+ $('dSup').textContent=activeSups.size;
+ $('dSupSub').textContent=`${Math.max(0,supNames.length-activeSups.size)} sin venta`;
+ const companyTarget=Math.max(0,need.dailyGeneral), companyLevel=dailyLevel(entered.length,companyTarget);
+ $('dDailyGoal').textContent=`${entered.length} / ${companyTarget.toFixed(1)}`;
+ $('dDailyGoal').className='v '+(companyLevel==='ok'?'ind-ok':companyLevel==='mid'?'ind-mid':'ind-low');
+ $('dDailyGoalSub').innerHTML=`${companyLevel==='ok'?'🟢 META DEL DÍA ALCANZADA':companyLevel==='mid'?'🟡 CERCA DE LA META DEL DÍA':'🔴 POR DEBAJO DE LA META DEL DÍA'} · ${need.remaining} por completar · ${need.daysLeft} días laborables restantes`;
+ $('dMonthGoal').textContent=need.goal;
+ $('dMonthProgress').textContent=`${need.before} acumuladas antes de esta fecha`;
+ $('dailyTitle').textContent=`Seguimiento diario — ${fmt(jsDate(d.split('-').reverse().join('/')))}`;
+ $('dailySubtitle').textContent=`${zone||'Todas las zonas'} · Meta mensual ${need.goal} · ${supNames.length} supervisores`;
+
+ let elapsed=Math.max(1,businessDaysBetween(new Date(Number(mk.slice(0,4)),Number(mk.slice(5,7))-1,1),new Date(Number(d.slice(0,4)),Number(d.slice(5,7))-1,Number(d.slice(8,10)))));
+ let body=[];
+ supNames.forEach(sup=>{
+   let supDay=entered.filter(r=>r.supervisor===sup), supMonthToDate=monthRows.filter(r=>r.supervisor===sup&&iso(r.ingreso)<=d);
+   let avg=supMonthToDate.length/elapsed, lv=dailyLevel(supDay.length,need.perSup);
+   body.push(`<tr class="daily-sup-row"><td><b><button class="daily-person-link" onclick="openPerson('supervisor',${JSON.stringify(sup).replace(/"/g,'&quot;')})">👤 ${sup} ↗</button></b></td><td><b>${supDay.length}</b></td><td><b>${avg.toFixed(2)}</b></td><td><b>${need.perSup.toFixed(2)}</b></td><td>${dailyState(supDay.length,need.perSup)}</td><td>${supDay.length?'<span class="badge ok">CON VENTA</span>':'<span class="badge bad">SIN VENTA</span>'}</td></tr>`);
+   let sellers=sellerUniverseForSupervisor(sup,mk), sellerTarget=sellers.length?need.perSup/sellers.length:0;
+   sellers.forEach(seller=>{
+     let dayCount=supDay.filter(r=>r.asesor===seller).length;
+     let monthCount=monthRows.filter(r=>r.supervisor===sup&&r.asesor===seller&&iso(r.ingreso)<=d).length;
+     let savg=monthCount/elapsed;
+     body.push(`<tr class="daily-seller-row ${dayCount?'':'zero'}"><td>↳ <button class="daily-person-link seller" onclick="openPerson('asesor',${JSON.stringify(seller).replace(/"/g,'&quot;')})">${seller} ↗</button></td><td>${dayCount}</td><td>${savg.toFixed(2)}</td><td>${sellerTarget.toFixed(2)}</td><td>${dailyState(dayCount,sellerTarget)}</td><td>${dayCount?'<span class="badge ok">🟢 HIZO VENTA</span>':'<span class="badge bad">🔴 NO HIZO VENTA</span>'}</td></tr>`);
+   });
+ });
+ $('dailySupBody').innerHTML=body.join('')||'<tr><td colspan="6" class="empty">Sin supervisores para este mes/zona</td></tr>';
+
+
+}
+
+/* V22 — Extensión SEMANAL de Seguimiento. El modo Diario conserva renderDailyOriginal(). */
+function followWeekBounds(mk,w){
+  const [y,m]=mk.split('-').map(Number), last=new Date(y,m,0).getDate();
+  const starts=[1,8,15,22,29], start=starts[Math.max(0,Math.min(4,Number(w)-1))];
+  const end=Math.min(start+6,last);
+  return {
+    start:`${y}-${String(m).padStart(2,'0')}-${String(start).padStart(2,'0')}`,
+    end:`${y}-${String(m).padStart(2,'0')}-${String(end).padStart(2,'0')}`,
+    startDay:start,endDay:end
+  };
+}
+function businessDaysInIsoRange(a,b){
+  const [ya,ma,da]=a.split('-').map(Number),[yb,mb,db]=b.split('-').map(Number);
+  return businessDaysBetween(new Date(ya,ma-1,da),new Date(yb,mb-1,db));
+}
+function weeklyNeedForRange(mk,start,end){
+  const goal=monthGoal(mk), zone=$('zone').value;
+  const [y,m]=mk.split('-').map(Number), monthEnd=new Date(y,m,0);
+  const [ys,ms,ds]=start.split('-').map(Number), chosen=new Date(ys,ms-1,ds);
+  const before=rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&iso(r.ingreso)<start&&(!zone||r.zona===zone)).length;
+  const remaining=Math.max(0,goal-before);
+  const daysLeft=Math.max(1,businessDaysBetween(chosen,monthEnd));
+  const weekDays=Math.max(1,businessDaysInIsoRange(start,end));
+  const weeklyGeneral=remaining/daysLeft*weekDays;
+  const supNames=[...new Set(rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(!zone||r.zona===zone)).map(r=>r.supervisor).filter(Boolean))];
+  return {goal,before,remaining,daysLeft,weekDays,weeklyGeneral,supCount:Math.max(1,supNames.length),perSup:weeklyGeneral/Math.max(1,supNames.length)};
+}
+function renderWeeklyFollow(){
+  const mk=$('month').value;if(!mk)return;
+  const w=$('reportWeek').value||'1', b=followWeekBounds(mk,w), zone=$('zone').value;
+  const monthRows=rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(!zone||r.zona===zone));
+  const weekRows=monthRows.filter(r=>{const d=iso(r.ingreso);return d>=b.start&&d<=b.end});
+  const need=weeklyNeedForRange(mk,b.start,b.end);
+  const supNames=[...new Set(monthRows.map(r=>r.supervisor).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const sellerNames=[...new Set(monthRows.map(r=>r.asesor).filter(Boolean))];
+  const activeSellers=new Set(weekRows.map(r=>norm(r.asesor)).filter(Boolean));
+  const activeSups=new Set(weekRows.map(r=>norm(r.supervisor)).filter(Boolean));
+
+  $('dInLabel').textContent='Ventas ingresadas';
+  $('dIn').textContent=weekRows.length;
+  $('dInSub').textContent=`Semana ${w} · ${b.startDay}–${b.endDay}`;
+  $('dSell').textContent=activeSellers.size;
+  $('dSellSub').textContent=`${Math.max(0,sellerNames.length-activeSellers.size)} sin venta en la semana`;
+  $('dSup').textContent=activeSups.size;
+  $('dSupSub').textContent=`${Math.max(0,supNames.length-activeSups.size)} sin venta en la semana`;
+
+  const target=Math.max(0,need.weeklyGeneral), level=dailyLevel(weekRows.length,target);
+  $('dGoalLabel').textContent='Meta semanal general';
+  $('dDailyGoal').textContent=`${weekRows.length} / ${target.toFixed(1)}`;
+  $('dDailyGoal').className='v '+(level==='ok'?'ind-ok':level==='mid'?'ind-mid':'ind-low');
+  const faltan=Math.max(0,target-weekRows.length);
+  $('dDailyGoalSub').innerHTML=`${level==='ok'?'🟢 META SEMANAL ALCANZADA':level==='mid'?'🟡 CERCA DE LA META SEMANAL':'🔴 POR DEBAJO DE LA META SEMANAL'} · ${faltan.toFixed(1)} por completar`;
+  $('dMonthGoal').textContent=need.goal;
+  $('dMonthProgress').textContent=`${need.before} acumuladas antes de esta semana`;
+
+  $('dailyTitle').textContent=`Seguimiento semanal — Semana ${w} · ${b.startDay}–${b.endDay}/${mk.slice(5,7)}/${mk.slice(0,4)}`;
+  $('dailySubtitle').textContent=`${zone||'Todas las zonas'} · Meta mensual ${need.goal} · ${supNames.length} supervisores`;
+  $('dSalesHead').textContent='Ventas de la semana';
+  $('dAvgHead').textContent='Promedio semanal del mes';
+  $('dNeedHead').textContent='Meta semanal necesaria';
+
+  const elapsedWeeks=Math.max(1,Number(w));
+  let body=[];
+  supNames.forEach(sup=>{
+    const supWeek=weekRows.filter(r=>r.supervisor===sup);
+    const supToDate=monthRows.filter(r=>r.supervisor===sup&&iso(r.ingreso)<=b.end);
+    const avg=supToDate.length/elapsedWeeks;
+    body.push(`<tr class="daily-sup-row"><td><b><button class="daily-person-link" onclick="openPerson('supervisor',${JSON.stringify(sup).replace(/"/g,'&quot;')})">👤 ${sup} ↗</button></b></td><td><b>${supWeek.length}</b></td><td><b>${avg.toFixed(2)}</b></td><td><b>${need.perSup.toFixed(2)}</b></td><td>${dailyState(supWeek.length,need.perSup)}</td><td>${supWeek.length?'<span class="badge ok">CON VENTA</span>':'<span class="badge bad">SIN VENTA</span>'}</td></tr>`);
+    const sellers=sellerUniverseForSupervisor(sup,mk), sellerTarget=sellers.length?need.perSup/sellers.length:0;
+    sellers.forEach(seller=>{
+      const weekCount=supWeek.filter(r=>r.asesor===seller).length;
+      const toDate=monthRows.filter(r=>r.supervisor===sup&&r.asesor===seller&&iso(r.ingreso)<=b.end).length;
+      const avgSeller=toDate/elapsedWeeks;
+      body.push(`<tr class="daily-seller-row ${weekCount?'':'zero'}"><td>↳ <button class="daily-person-link seller" onclick="openPerson('asesor',${JSON.stringify(seller).replace(/"/g,'&quot;')})">${seller} ↗</button></td><td>${weekCount}</td><td>${avgSeller.toFixed(2)}</td><td>${sellerTarget.toFixed(2)}</td><td>${dailyState(weekCount,sellerTarget)}</td><td>${weekCount?'<span class="badge ok">🟢 HIZO VENTA</span>':'<span class="badge bad">🔴 NO HIZO VENTA</span>'}</td></tr>`);
+    });
+  });
+  $('dailySupBody').innerHTML=body.join('')||'<tr><td colspan="6" class="empty">Sin supervisores para este mes/zona</td></tr>';
+}
+function renderDaily(){
+  const weekly=$('followMode')&&$('followMode').value==='weekly';
+  if(weekly){renderWeeklyFollow();return;}
+  $('dGoalLabel').textContent='Meta diaria general';
+  $('dInLabel').textContent='Ventas ingresadas';
+  $('dInSub').textContent='En la fecha elegida';
+  $('dSalesHead').textContent='Ventas del día';
+  $('dAvgHead').textContent='Promedio diario del mes';
+  $('dNeedHead').textContent='Meta diaria necesaria';
+  renderDailyOriginal();
+}
+function syncFollowMode(){
+  const weekly=$('followMode').value==='weekly';
+  $('followDayWrap').style.display=weekly?'none':'block';
+  $('followWeekWrap').style.display=weekly?'block':'none';
+  renderDaily();
+}
+$('followMode').addEventListener('change',syncFollowMode);
+$('reportWeek').addEventListener('change',renderDaily);
+
+function controlRankRows(field,cutoff){
+ const mk=$('month').value,zone=$('zone').value;
+ return groupStats(rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(!cutoff||r.ingreso<=cutoff)&&(zone==='TODAS'||r.zona===zone)),field).sort((a,b)=>b.ing-a.ing||a.name.localeCompare(b.name));
+}
+function controlRankCutoff(){
+ const mk=$('month').value,zone=$('zone').value;
+ const a=ROWS.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(zone==='TODAS'||r.zona===zone)).map(r=>r.ingreso.getTime());
+ return a.length?new Date(Math.max(...a)):null;
+}
+function controlRankMark(i,p){let medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}°`;return {medal,arrow:p<0?'•':p>i?'↑':p<i?'↓':'→',cls:p>i?'rank-up':p>=0&&p<i?'rank-down':'rank-flat'}}
+function controlRejectCategory(obs){
+ const t=norm(obs);
+ if(/RIESGO|CREDITICIO|TRANSACCION NO AUTORIZADA|VALIDACION/.test(t))return 'RIESGO / VALIDACIÓN';
+ if(/ACOMETIDA|COBERTURA|PUERTO|FACILIDAD TECNICA|FACTIBILIDAD|POSTE/.test(t))return 'TÉCNICO / INSTALACIÓN';
+ if(/NUMERO INCORRECTO|DATOS INCORRECT|NO HA CONTRATADO|NO CONTRATO|TRASLADO/.test(t))return 'COMERCIAL';
+ if(/NO DESEA|VIAJE|ECONOMIC|OTRO OPERADOR|NO CONTEST|NO RESPOND|RECHAZO LA INSTALACION/.test(t))return 'CLIENTE';
+ return 'OTROS / REVISAR';
+}
+function renderControlRejects(){
+ let body=$('rejectDailyBody'),sum=$('rejectReasonSummary');if(!body||!sum)return;
+ const mk=$('month').value;
+ const zone=$('zone').value;
+ let list=rows.filter(r=>{
+   const d=r.ingreso||r.instalacion;
+   return d && monthKey(d)===mk &&
+          (zone==='TODAS'||r.zona===zone) &&
+          norm(r.estado).includes('RECHAZ');
+ });
+ let c={};
+ list.forEach(r=>{let k=controlRejectCategory(r.obs);c[k]=(c[k]||0)+1});
+ sum.innerHTML=Object.entries(c).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<span class="reject-chip"><b>${v}</b> ${k}</span>`).join('')||'<span class="empty">No hay rechazados en el mes y zona seleccionados.</span>';
+ body.innerHTML=list.slice().sort((a,b)=>(b.ingreso||b.instalacion||0)-(a.ingreso||a.instalacion||0)).map(r=>`<tr><td>${fmt(r.ingreso||r.instalacion)}</td><td>${r.cliente||'—'}</td><td>${r.supervisor||'—'}</td><td>${r.asesor||'—'}</td><td>${controlRejectCategory(r.obs)}</td><td class="reject-obs">${r.obs||'Sin comentario registrado'}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No hay operaciones rechazadas para este mes y zona.</td></tr>';
+}
+
+function renderTop(){
+ if(viewMode==='commercial'){
+   const mk=$('month').value, zone=$('zone').value;
+   const dates=rows.filter(r=>r.ingreso&&monthKey(r.ingreso)===mk&&(!zone||zone==='TODAS'||r.zona===zone)).map(r=>r.ingreso.getTime());
+   const rankInput=$('rankingDate');
+   let day=null;
+   if(rankInput&&rankInput.value){
+     const [yy,mm,dd]=rankInput.value.split('-').map(Number);
+     day=new Date(yy,mm-1,dd);
+   }else if(dates.length){
+     day=new Date(Math.max(...dates));
+     if(rankInput)rankInput.value=iso(day);
+   }
+   const selectedIso=day?iso(day):'';
+   const dailyRows=selectedIso?rows.filter(r=>iso(r.ingreso)===selectedIso&&(!zone||zone==='TODAS'||r.zona===zone)):[];
+   const sellers=groupStats(dailyRows,'asesor').sort((a,b)=>b.ing-a.ing||a.name.localeCompare(b.name)).slice(0,8);
+   const supervisors=groupStats(dailyRows,'supervisor').sort((a,b)=>b.ing-a.ing||a.name.localeCompare(b.name)).slice(0,8);
+   const suffix=day?' — '+fmt(day):'';
+   if($('sellerRankingTitle'))$('sellerRankingTitle').textContent='Ranking diario de vendedores'+suffix;
+   if($('supRankingTitle'))$('supRankingTitle').textContent='Ranking diario de supervisores'+suffix;
+   const sellerMax=Math.max(1,...sellers.map(x=>x.ing));
+   $('topSellers').innerHTML=sellers.map((x,i)=>`<div class="rank-bar-row" onclick="openPerson('asesor',${JSON.stringify(x.name).replace(/"/g,'&quot;')})"><div class="rank-bar-head"><div class="rank-bar-name">${i+1}. ${x.name}</div><div class="rank-bar-value">${x.ing} venta${x.ing===1?'':'s'}</div></div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:${(x.ing/sellerMax)*100}%"></div></div></div>`).join('')||'<div class="empty">Sin ventas ingresadas en este día</div>';
+   const box=$('topSupervisors');
+   const supervisorMax=Math.max(1,...supervisors.map(x=>x.ing));
+   if(box)box.innerHTML=supervisors.map((x,i)=>`<div class="rank-bar-row" onclick="openPerson('supervisor',${JSON.stringify(x.name).replace(/"/g,'&quot;')})"><div class="rank-bar-head"><div class="rank-bar-name">${i+1}. ${x.name}</div><div class="rank-bar-value">${x.ing} venta${x.ing===1?'':'s'}</div></div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:${(x.ing/supervisorMax)*100}%"></div></div></div>`).join('')||'<div class="empty">Sin ventas ingresadas en este día</div>';
+   return;
+ }
+ let sellers=groupStats(activeRows(),'asesor').slice(0,8);
+ $('topSellers').innerHTML=sellers.map((x,i)=>`<div class="card" style="box-shadow:none;margin:7px 0;padding:10px;cursor:pointer" onclick="openPerson('asesor',${JSON.stringify(x.name).replace(/"/g,'&quot;')})"><b>${i+1}. ${x.name}</b><div style="font-size:12px;color:#6b7280;margin-top:3px">${x.inst+' instaladas'}${viewMode==='economic'?' · '+money(x.factor):''}</div></div>`).join('')||'<div class="empty">Sin datos</div>';
+ let supervisors=groupStats(activeRows(),'supervisor').slice(0,8), box=$('topSupervisors');
+ if(box)box.innerHTML=supervisors.map((x,i)=>`<div class="card" style="box-shadow:none;margin:7px 0;padding:10px;cursor:pointer" onclick="openPerson('supervisor',${JSON.stringify(x.name).replace(/"/g,'&quot;')})"><b>${i+1}. ${x.name}</b><div style="font-size:12px;color:#6b7280;margin-top:3px">${x.inst+' instaladas'}</div></div>`).join('')||'<div class="empty">Sin datos</div>';
+}
+function openPerson(type,name){
+ let list=activeRows().filter(r=>clean(r[type])===name), g=groupStats(list,type)[0];if(!g)return;
+ let zones=countBy(list,r=>r.zona||'SIN ZONA'), modes=countBy(list,r=>r.modalidad||'SIN MODALIDAD'), today=iso(new Date()), todayIn=list.filter(r=>iso(r.ingreso)===today).length, todayInst=list.filter(r=>installed(r)&&iso(r.instalacion)===today).length;
+ let title=type==='supervisor'?'Supervisor':'Vendedor', sub=type==='asesor'?(list.find(r=>r.supervisor)?.supervisor||'—'):'';
+ let child='';
+ if(type==='supervisor'){
+   let sellers=groupStats(list,'asesor');child=`<div class="card"><h2>Vendedores del supervisor</h2><div class="tablewrap"><table><thead><tr><th>Vendedor</th><th>Ingresadas</th><th>Instaladas</th><th>% cierre</th><th class="moneyCol">Factor Base</th><th></th></tr></thead><tbody>${sellers.map(s=>`<tr class="clickable" onclick="openNestedSeller(${JSON.stringify(s.name).replace(/"/g,'&quot;')})"><td><b>${s.name}</b></td><td>${s.ing}</td><td>${s.inst}</td><td>${s.close.toFixed(1)}%</td><td class="moneyCell">${money(s.factor)}</td><td>Ver vendedor →</td></tr>`).join('')}</tbody></table></div></div>`;
+ }
+ $('drawerContent').innerHTML=`<div class="panelhead"><div class="label">${title}</div><h2>${name}</h2>${sub?`<div class="sub" style="color:#6b7280">Supervisor: ${sub}</div>`:''}<div class="mini"><div class="card"><div class="label">Ingresadas</div><div class="v">${g.ing}</div></div><div class="card"><div class="label">Instaladas</div><div class="v green">${g.inst}</div></div>${type==='supervisor'&&viewMode!=='commercial'?`<div class="card"><div class="label">Base proporcional</div><div class="v ${baseLevel(g.inst)==='ok'?'ind-ok':baseLevel(g.inst)==='mid'?'ind-mid':'ind-low'}">${g.inst}/${supervisorBase().toFixed(2)}</div><div style="margin-top:5px">${basePill(g.inst)}</div></div>`:`<div class="card"><div class="label">Meta general</div><div class="v ${goalColor(g.inst)}">${g.inst}/20</div><div style="margin-top:5px">${goalPill(g.inst)}</div></div>`}<div class="card"><div class="label">Promedio por día</div><div class="v">${avgDay(viewMode==='commercial'?g.ing:g.inst)}</div><div style="font-size:11px;color:#6b7280">Lunes a sábado</div></div>${type==='supervisor'&&viewMode==='commercial'?(()=>{let a=teamActivity(list);return `<div class="card"><div class="label">Vendedores activos hoy</div><div class="v">${a.active}/${a.total}</div><div style="font-size:11px;color:#6b7280">${a.inactive} sin ingreso · ${a.pct.toFixed(0)}% activos</div></div>`})():''}<div class="card moneyOnly"><div class="label">Factor Base</div><div class="v">${money(g.factor)}</div></div><div class="card"><div class="label">% cierre</div><div class="v">${g.close.toFixed(1)}%</div></div><div class="card"><div class="label">Ingresadas hoy</div><div class="v">${todayIn}</div></div><div class="card"><div class="label">Instaladas hoy</div><div class="v">${todayInst}</div></div><div class="card"><div class="label">Faltan meta</div><div class="v">${Math.max(0,20-g.inst)}</div></div></div><div style="font-size:12px;color:#6b7280">Zona: ${Object.entries(zones).map(([k,v])=>`${k} ${v}`).join(' · ')}<br>Modalidad: ${Object.entries(modes).map(([k,v])=>`${k} ${v}`).join(' · ')}</div></div>${child}<div class="card" style="margin-top:12px"><h2>Operaciones de ${name}</h2><div class="tablewrap"><table><thead><tr><th>F. ingreso</th><th>F. instalación</th><th>Cliente</th><th>Estado</th><th class="moneyCol">Cargo fijo</th><th>Zona</th><th>Modalidad</th></tr></thead><tbody>${list.slice(0,300).map(r=>`<tr><td>${fmt(r.ingreso)}</td><td>${fmt(r.instalacion)}</td><td>${r.cliente||'—'}</td><td>${stateBadge(r.estado)}</td><td class="moneyCell">${money(r.cargo)}</td><td>${r.zona||'—'}</td><td>${r.modalidad||'—'}</td></tr>`).join('')}</tbody></table></div></div>`;
+ $('drawer').classList.add('show');
+}
+function openNestedSeller(name){openPerson('asesor',name)}
+function closeDrawer(){$('drawer').classList.remove('show')}
+$('drawer').addEventListener('click',e=>{if(e.target===$('drawer'))closeDrawer()});
+document.querySelectorAll('.subtab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.subtab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});
+function openDailyTrackingTab(){
+ const b=document.querySelector('.subtab[data-tab="daily"]');
+ if(!b)return;
+ document.querySelectorAll('.subtab').forEach(x=>x.classList.remove('active'));
+ document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active'); $('daily').classList.add('active');
+}
+document.querySelectorAll('.modebtn').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.modebtn').forEach(x=>x.classList.remove('active'));b.classList.add('active');viewMode=b.dataset.mode;if(viewMode==='commercial')openDailyTrackingTab();
+ const help=viewMode==='commercial'?'📥 <b>Control Diario:</b> actividad diaria según FECHA DE INGRESO. Ideal para reuniones. Sin montos.':viewMode==='production'?'✅ <b>Mensual:</b> solo INSTALADOS según FECHA DE INSTALACIÓN. Meta y resultados, sin montos.':'🔒 <b>Gerencia:</b> instalaciones pagables + Factor Base/Cargo Fijo. Uso interno.';
+ $('modeHelp').innerHTML=help;
+ renderAll();
+});
+
+function saveMonthlyGoal(){
+ const mk=$('month').value||'ALL', v=Math.max(0,Number($('monthlyGoalInput').value)||0);
+ localStorage.setItem('claro_goal_month_'+mk,v); $('goalMonthlyMgmt').value=v; renderAll();
+}
+function loadV4Config(){
+ const mk=$('month').value||'ALL', g=monthGoal(mk);
+ if($('monthlyGoalInput'))$('monthlyGoalInput').value=g;
+ if($('goalMonthlyMgmt'))$('goalMonthlyMgmt').value=g;
+ if($('goalSellerInput'))$('goalSellerInput').value=mgmtGoal('goal_seller',mk);
+ if($('goalSupInput'))$('goalSupInput').value=mgmtGoal('goal_sup',mk);
+ if($('goalJlbInput'))$('goalJlbInput').value=mgmtGoal('goal_jlb',mk);
+}
+function saveMgmtGoals(){
+ const mk=$('month').value||'ALL';
+ localStorage.setItem('claro_goal_seller_'+mk,$('goalSellerInput').value);
+ localStorage.setItem('claro_goal_sup_'+mk,$('goalSupInput').value);
+ localStorage.setItem('claro_goal_jlb_'+mk,$('goalJlbInput').value);
+ localStorage.setItem('claro_goal_month_'+mk,Math.max(0,Number($('goalMonthlyMgmt').value)||0));
+ $('monthlyGoalInput').value=$('goalMonthlyMgmt').value; renderAll();
+}
+function renderV4(){
+ loadV4Config();
+ const {paid}=periodSets(), base=activeRows();
+ const rej=filtered.filter(rejected);
+
+ if($('v4Rejected'))$('v4Rejected').textContent=rej.length;
+
+ // Existing monthly validation logic (already proven with the Excel).
+ const bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+ const grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+ if($('v4Bio'))$('v4Bio').textContent=`${bio} / ${grab}`;
+
+ // === MENSUAL V10: populate the visible cards from THIS SAME paid array ===
+ if(viewMode==='production'){
+   const put=(id,v)=>{const e=$(id);if(e)e.textContent=v;};
+
+   // Rejected for selected month + zone.
+   const mk=$('month').value, zone=$('zone').value;
+   const rejMonth=rows.filter(r=>rejected(r)&&r.ingreso&&(!mk||monthKey(r.ingreso)===mk)&&(!zone||r.zona===zone));
+   put('monthlyRejectedCount',rejMonth.length);
+
+   // Best / lowest seller and supervisor from installed monthly production.
+   function ext(field){
+     const c={};
+     paid.forEach(r=>{const n=String(r[field]||'').trim();if(n)c[n]=(c[n]||0)+1;});
+     const a=Object.entries(c).map(([name,count])=>({name,count})).sort((x,y)=>y.count-x.count||x.name.localeCompare(y.name,'es'));
+     return a.length?{best:a[0],worst:a[a.length-1]}:null;
+   }
+   const se=ext('asesor'), su=ext('supervisor');
+   if(se){
+     put('bestSellerMonth',se.best.name); put('bestSellerProd',`${se.best.count} instalada${se.best.count===1?'':'s'}`);
+     put('worstSellerMonth',se.worst.name); put('worstSellerProd',`${se.worst.count} instalada${se.worst.count===1?'':'s'}`);
+     let d=se.best.count-se.worst.count; put('sellerProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+   }
+   if(su){
+     put('bestSupMonth',su.best.name); put('bestSupProd',`${su.best.count} instalada${su.best.count===1?'':'s'}`);
+     put('worstSupMonth',su.worst.name); put('worstSupProd',`${su.worst.count} instalada${su.worst.count===1?'':'s'}`);
+     let d=su.best.count-su.worst.count; put('supProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+   }
+
+   // Validation/modalidad from the exact same logic the dashboard already used successfully.
+   put('monthlyBio',bio);
+   put('monthlyGrab',grab);
+
+   // PRODUCTO = plan. Count all installed sales of selected month.
+   const pc={};
+   paid.forEach(r=>{const k=String(r.producto||'').trim();if(k)pc[k]=(pc[k]||0)+1;});
+   const packs=Object.entries(pc).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'es'));
+   if(packs.length){
+     put('topPackageMonth',packs[0][0]);
+     put('topPackageCount',`${packs[0][1]} instalada${packs[0][1]===1?'':'s'}`);
+     if($('packageSummaryMonth'))$('packageSummaryMonth').innerHTML=(()=>{const mx=Math.max(...packs.map(x=>x[1]),1);return packs.map(([k,v])=>`<div class="product-bar-row"><div class="product-bar-label" title="${k}">${k}</div><div class="product-bar-track"><div class="product-bar-fill" style="width:${(v/mx)*100}%"></div></div><div class="product-bar-value">${v}</div></div>`).join('')})();
+   }
+ }
+
+ const rc={};rej.forEach(r=>rc[rejectCategory(r)]=(rc[rejectCategory(r)]||0)+1);
+ if($('rejectSummary'))$('rejectSummary').innerHTML=Object.entries(rc).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin rechazadas</div>';
+ if($('validationSummary'))$('validationSummary').innerHTML=`<p><b>Biometría / Huellero:</b> ${bio}</p><p><b>Grabación:</b> ${grab}</p><p><b>Por clasificar:</b> ${paid.length-bio-grab}</p>`;
+ const z={};paid.forEach(r=>{let k=norm(r.zona)||'SIN ZONA';z[k]=(z[k]||0)+1});
+ if($('zoneSummaryV4'))$('zoneSummaryV4').innerHTML=Object.entries(z).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee"><span>${k}</span><b>${v}</b></div>`).join('')||'<div class="empty">Sin datos</div>';
+ renderEconomicSellers(paid);
+}
+function renderEconomicSellers(paid){
+ if(!$('economicSellerSummary'))return;
+ const names=[...new Set([...personnel.filter(p=>/VENDEDOR/.test(norm(p.rol))).map(p=>p.nombre),...paid.map(r=>r.asesor)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+ let body='';
+ names.forEach(name=>{
+  const list=paid.filter(r=>norm(r.asesor)===norm(name)).sort((a,b)=>(a.instalacion||0)-(b.instalacion||0));
+  const total=list.reduce((s,r)=>s+r.cargo,0), excess=Math.max(0,total-750);
+  let running=0, commission=0, unclassified=0;
+  list.forEach(r=>{
+   const before=running, after=running+r.cargo, commPart=Math.max(0,after-Math.max(750,before));
+   const rate=commissionRate(r);
+   if(commPart>0){if(rate==null)unclassified+=commPart;else commission+=commPart*rate;}
+   running=after;
+  });
+  const p=personInfo(name), contract=p?.contrato||'SIN DEFINIR';
+  body+=`<tr><td>${name}</td><td>${contract}</td><td>${list.length}</td><td>${money(total)}</td><td>S/ 750.00</td><td>${money(excess)}</td><td>${money(commission)}</td><td>${unclassified?`⚠️ ${money(unclassified)}`:'OK'}</td></tr>`;
+ });
+ $('economicSellerSummary').innerHTML=`<table><thead><tr><th>Vendedor</th><th>Contrato</th><th>Instaladas</th><th>Cargo fijo acumulado</th><th>Base</th><th>Excedente</th><th>Comisión calculada</th><th>Por clasificar</th></tr></thead><tbody>${body||'<tr><td colspan="8">Sin datos</td></tr>'}</tbody></table>`;
+}
+const _renderAllV35 = renderAll;
+renderAll = function(){ _renderAllV35(); renderV4(); 
+ if($('monthlyConfig'))$('monthlyConfig').style.display=viewMode==='production'?'block':'none';
+ if($('managementConfig'))$('managementConfig').style.display=viewMode==='economic'?'block':'none';
+};
+
+
+function renderV41(){
+  document.body.classList.remove('mode-commercial','mode-production','mode-economic');
+  document.body.classList.add('mode-'+viewMode);
+  let ps=periodSets(), paid=ps.paid||[], base=activeRows();
+  let goal=monthGoal($('month').value), pct=goal?paid.length/goal*100:0;
+
+  // Daily activity is always FECHA DE INGRESO.
+  let todayKey=ymd(new Date());
+  let enteredPeriod=(ps.entered||[]);
+  let todayRows=enteredPeriod.filter(r=>r.ingreso && ymd(r.ingreso)===todayKey);
+  let sellers=[...new Set(base.map(r=>r.asesor).filter(Boolean))];
+  let activeNames=new Set(todayRows.map(r=>norm(r.asesor)).filter(Boolean));
+  let active=sellers.filter(n=>activeNames.has(norm(n))).length;
+
+  if($('v41Today')) $('v41Today').textContent=todayRows.length;
+  if($('v41Active')) $('v41Active').textContent=`${active} / ${sellers.length}`;
+  if($('v41Inactive')) $('v41Inactive').textContent=`${Math.max(0,sellers.length-active)} sin actividad`;
+  if($('v41EnteredMonth')) $('v41EnteredMonth').textContent=enteredPeriod.length;
+
+  // Reuse business-day denominator already conceptually used in V3.x: Mon-Sat.
+  let mk=$('month').value, denom=1;
+  if(mk){
+    let [yy,mm]=mk.split('-').map(Number), now=new Date(), last=(now.getFullYear()==yy&&now.getMonth()+1==mm)?now.getDate():new Date(yy,mm,0).getDate();
+    denom=0;
+    for(let d=1;d<=last;d++) if(new Date(yy,mm-1,d).getDay()!=0) denom++;
+    denom=Math.max(1,denom);
+  }
+  if($('v41Avg')) $('v41Avg').textContent=(enteredPeriod.length/denom).toFixed(1);
+
+  if($('v41Prod')) $('v41Prod').textContent=paid.length;
+  if($('v41Goal')) $('v41Goal').textContent=goal;
+  if($('v41Missing')) $('v41Missing').textContent=Math.max(0,goal-paid.length);
+  if($('v41GoalPct')) $('v41GoalPct').textContent=`${pct.toFixed(1)}% de cumplimiento`;
+  if($('v41GoalBar')) $('v41GoalBar').style.width=Math.min(100,pct)+'%';
+
+  let rej=filtered.filter(rejected);
+  if($('v41Rejected')) $('v41Rejected').textContent=rej.length;
+  let bio=paid.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+  let grab=paid.filter(r=>validationType(r)==='GRABACIÓN').length;
+  if($('v41Validation')) $('v41Validation').textContent=`${bio} / ${grab}`;
+
+  // Clarify section header
+  let sum=document.querySelector('.summaryline');
+  if(sum){
+    let label=viewMode==='commercial'?'CONTROL DIARIO':viewMode==='production'?'MENSUAL':'GERENCIA';
+    sum.innerHTML=sum.innerHTML.replace(/CONTROL DIARIO|MENSUAL|GERENCIA|CONTROL COMERCIAL/g,label);
+  }
+}
+const _renderAllV4 = renderAll;
+renderAll=function(){_renderAllV4();renderV41();};
+
+
+// Edición rápida de la misma meta mensual desde Control Diario.
+function openDailyGoalEditor(){
+  const mk=$('month').value||'ALL';
+  $('dailyGoalInput').value=monthGoal(mk);
+  $('goalEditModal').style.display='flex';
+}
+function closeDailyGoalEditor(){ $('goalEditModal').style.display='none'; }
+function saveDailyGoalEditor(){
+  const mk=$('month').value||'ALL';
+  const v=Math.max(0,Number($('dailyGoalInput').value)||0);
+  localStorage.setItem('claro_goal_month_'+mk,v);
+  if($('monthlyGoalInput')) $('monthlyGoalInput').value=v;
+  if($('goalMonthlyMgmt')) $('goalMonthlyMgmt').value=v;
+  closeDailyGoalEditor();
+  renderAll();
+}
+$('editGoalDaily').addEventListener('click',openDailyGoalEditor);
+$('cancelDailyGoal').addEventListener('click',closeDailyGoalEditor);
+$('saveDailyGoal').addEventListener('click',saveDailyGoalEditor);
+$('goalEditModal').addEventListener('click',e=>{if(e.target===$('goalEditModal'))closeDailyGoalEditor()});
+$('dailyGoalInput').addEventListener('keydown',e=>{
+  if(e.key==='Enter')saveDailyGoalEditor();
+  if(e.key==='Escape')closeDailyGoalEditor();
+});
+
+
+document.addEventListener('change',function(e){
+ if(e.target && e.target.id==='rankingDate') renderTop();
+});
+
+
+/* V9 - Mensual REAL: esta función está dentro del script ejecutable */
+function renderMonthlyCardsV9(){
+  if(viewMode!=='production') return;
+
+  const mk=$('month').value;
+  const zone=$('zone').value;
+
+  // Use the same production set that already feeds the correct top KPI (8 in the screenshot).
+  // periodSets().paid = INSTALADO + FECHA DE INSTALACIÓN del mes seleccionado.
+  const paid=(periodSets().paid||[]).filter(r=>!zone || r.zona===zone);
+
+  // Rechazadas: month selected + zone. Prefer ingreso because rejected rows need not have installation date.
+  const rej=rows.filter(r=>rejected(r) && r.ingreso && (!mk || monthKey(r.ingreso)===mk) && (!zone || r.zona===zone));
+  if($('monthlyRejectedCount')) $('monthlyRejectedCount').textContent=rej.length;
+
+  const put=(id,v)=>{const el=$(id); if(el) el.textContent=v;};
+
+  function getExtremes(field){
+    const counts={};
+    paid.forEach(r=>{
+      const n=String(r[field]||'').trim();
+      if(n) counts[n]=(counts[n]||0)+1;
+    });
+    const arr=Object.entries(counts).map(([name,count])=>({name,count}))
+      .sort((a,b)=>b.count-a.count || a.name.localeCompare(b.name,'es'));
+    return arr.length ? {best:arr[0], worst:arr[arr.length-1]} : null;
+  }
+
+  const sellers=getExtremes('asesor');
+  const sups=getExtremes('supervisor');
+
+  if(sellers){
+    put('bestSellerMonth',sellers.best.name);
+    put('bestSellerProd',`${sellers.best.count} instalada${sellers.best.count===1?'':'s'}`);
+    put('worstSellerMonth',sellers.worst.name);
+    put('worstSellerProd',`${sellers.worst.count} instalada${sellers.worst.count===1?'':'s'}`);
+    const d=sellers.best.count-sellers.worst.count;
+    put('sellerProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+  }else{
+    put('bestSellerMonth','—'); put('bestSellerProd','0 instaladas');
+    put('worstSellerMonth','—'); put('worstSellerProd','0 instaladas');
+    put('sellerProdGap','Diferencia: 0 instalaciones');
+  }
+
+  if(sups){
+    put('bestSupMonth',sups.best.name);
+    put('bestSupProd',`${sups.best.count} instalada${sups.best.count===1?'':'s'}`);
+    put('worstSupMonth',sups.worst.name);
+    put('worstSupProd',`${sups.worst.count} instalada${sups.worst.count===1?'':'s'}`);
+    const d=sups.best.count-sups.worst.count;
+    put('supProdGap',`Diferencia: ${d} instalación${d===1?'':'es'}`);
+  }else{
+    put('bestSupMonth','—'); put('bestSupProd','0 instaladas');
+    put('worstSupMonth','—'); put('worstSupProd','0 instaladas');
+    put('supProdGap','Diferencia: 0 instalaciones');
+  }
+
+  // MODALIDAD from installed sales.
+  const bio=paid.filter(r=>/BIOMET|HUELL/.test(norm(r.modalidad))).length;
+  const grab=paid.filter(r=>/GRAB/.test(norm(r.modalidad))).length;
+  put('monthlyBio',bio);
+  put('monthlyGrab',grab);
+
+  // PRODUCTO = plan sold.
+  const products={};
+  paid.forEach(r=>{
+    const p=String(r.producto||'').trim();
+    if(p) products[p]=(products[p]||0)+1;
+  });
+  const packs=Object.entries(products).sort((a,b)=>b[1]-a[1] || a[0].localeCompare(b[0],'es'));
+  if(packs.length){
+    put('topPackageMonth',packs[0][0]);
+    put('topPackageCount',`${packs[0][1]} instalada${packs[0][1]===1?'':'s'}`);
+    if($('packageSummaryMonth')) $('packageSummaryMonth').innerHTML=packs.map(([k,v],i)=>
+      `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee"><span>${i+1}. ${k}</span><b>${v}</b></div>`
+    ).join('');
+  }else{
+    put('topPackageMonth','—');
+    put('topPackageCount','0 instaladas');
+    if($('packageSummaryMonth')) $('packageSummaryMonth').innerHTML='';
+  }
+}
+
+
+/* V11: navegación restaurada. No fuerza ningún modo. */
+const __renderAllV11 = renderAll;
+renderAll = function(){
+  __renderAllV11();
+  if(viewMode==='production' && typeof renderV4==='function') renderV4();
+};
+
+
+/* === V15 GERENCIA ONLY === */
+function mgmtWeekRange(){
+ const w=Number(($('mgmtWeek')||{}).value||0);
+ if(!w)return null;
+ return w===1?[1,7]:w===2?[8,14]:w===3?[15,21]:w===4?[22,28]:[29,31];
+}
+function inMgmtWeek(d){
+ if(!d)return false;
+ const rg=mgmtWeekRange(); if(!rg)return true;
+ return d.getDate()>=rg[0]&&d.getDate()<=rg[1];
+}
+function mgmtMonthRows(){
+ const mk=$('month').value;
+ return rows.filter(r=>!mk||monthKey(r.ingreso)===mk||(r.instalacion&&monthKey(r.instalacion)===mk));
+}
+function mgmtInstalled(monthOnly=false){
+ const mk=$('month').value;
+ return rows.filter(r=>installed(r)&&r.instalacion&&(!mk||monthKey(r.instalacion)===mk)&&(monthOnly||inMgmtWeek(r.instalacion)));
+}
+function mgmtEntered(){
+ const mk=$('month').value;
+ return rows.filter(r=>r.ingreso&&(!mk||monthKey(r.ingreso)===mk)&&inMgmtWeek(r.ingreso));
+}
+function mgmtStatus(pct){return pct>=100?'good':pct>=70?'warn':'bad'}
+function mgmtStatusText(pct){return pct>=100?'🟢 LOGRADA':pct>=70?'🟡 CERCA':'🔴 POR DEBAJO'}
+function setMgmtCard(id,pct){const e=$(id);if(!e)return;e.classList.remove('good','warn','bad');e.classList.add(mgmtStatus(pct));}
+function renderEconomicSellersV15(paid){
+ if(!$('economicSellerSummary'))return;
+ const names=[...new Set([...personnel.filter(p=>/VENDEDOR/.test(norm(p.rol))).map(p=>p.nombre),...paid.map(r=>r.asesor)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+ let body='';
+ names.forEach(name=>{
+  const list=paid.filter(r=>norm(r.asesor)===norm(name)).sort((a,b)=>(a.instalacion||0)-(b.instalacion||0));
+  if(!list.length)return;
+  const total=list.reduce((z,r)=>z+r.cargo,0), excess=Math.max(0,total-750);
+  let running=0,commission=0;
+  list.forEach(r=>{const before=running,after=running+r.cargo,part=Math.max(0,after-Math.max(750,before)),rate=commissionRate(r);if(part>0&&rate!=null)commission+=part*rate;running=after;});
+  const bio=list.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO').length;
+  const grab=list.filter(r=>validationType(r)==='GRABACIÓN').length;
+  const contract=personInfo(name)?.contrato||'SIN DEFINIR';
+  body+=`<tr><td>${name}</td><td>${contract}</td><td>${list.length}</td><td>${bio}</td><td>${grab}</td><td>${money(total)}</td><td>S/ 750.00</td><td>${money(excess)}</td><td>${money(commission)}</td></tr>`;
+ });
+ $('economicSellerSummary').innerHTML=`<table><thead><tr><th>Vendedor</th><th>Contrato</th><th>Instaladas</th><th>Biometría / Huellero</th><th>Grabación</th><th>Cargo fijo acumulado</th><th>Base</th><th>Excedente</th><th>Comisión calculada</th></tr></thead><tbody>${body||'<tr><td colspan="9">Sin datos en el período</td></tr>'}</tbody></table>`;
+}
+function renderGerenciaV15(){
+ if(viewMode!=='economic')return;
+ const mk=$('month').value, week=Number(($('mgmtWeek')||{}).value||0);
+ document.body.classList.toggle('mgmt-week',!!week);
+ document.body.classList.toggle('mgmt-month',!week);
+ const installedPeriod=mgmtInstalled(false), installedMonth=mgmtInstalled(true);
+ const payable=installedPeriod.filter(r=>r.cargo>0);
+ const entered=mgmtEntered();
+ const nonpay=entered.filter(r=>!installed(r));
+ const nonpayAmount=nonpay.reduce((z,r)=>z+(Number(r.cargo)||0),0);
+ const factor=payable.reduce((z,r)=>z+r.cargo,0);
+ const bio=payable.filter(r=>validationType(r)==='BIOMETRÍA / HUELLERO');
+ const grab=payable.filter(r=>validationType(r)==='GRABACIÓN');
+ const bioFactor=bio.reduce((z,r)=>z+r.cargo,0), grabFactor=grab.reduce((z,r)=>z+r.cargo,0);
+ const monthGoalN=monthGoal(mk), weekGoal=Math.ceil(monthGoalN/5);
+ const monthPct=monthGoalN?installedMonth.length/monthGoalN*100:0;
+ const weekPct=weekGoal?installedPeriod.length/weekGoal*100:0;
+ const sellerNames=[...new Set((week?installedPeriod:installedMonth).map(r=>r.asesor).filter(Boolean))];
+ const factorTargetMonth=750*Math.max(1,sellerNames.length);
+ const factorTarget=week?factorTargetMonth/5:factorTargetMonth;
+ const factorPct=factorTarget?factor/factorTarget*100:0;
+ const put=(id,v)=>{const e=$(id);if(e)e.textContent=v};
+ const period=mk?monthLabel(mk):'Todos los meses';
+ const ranges={1:'1–7',2:'8–14',3:'15–21',4:'22–28',5:'29–fin'};
+
+ put('mgmtViewTitle',week?`VISTA SEMANAL — SEMANA ${week}`:`VISTA MENSUAL — ${period}`);
+ put('mgmtViewSub',week?`${ranges[week]} · ${period}. Todos los indicadores y la tabla inferior corresponden únicamente a esta semana.`:`Todos los indicadores y la tabla inferior corresponden únicamente a ${period}.`);
+
+ put('gProd',installedPeriod.length);put('gProdSub',week?`Instaladas · Semana ${week} (${ranges[week]})`:'Instaladas del mes');
+ put('gPay',payable.length);
+
+ put('gMonthGoal',`${installedMonth.length} / ${monthGoalN}`);put('gMonthGoalSub',`${monthPct.toFixed(1)}% de cumplimiento mensual`);put('gMonthGoalPill',mgmtStatusText(monthPct));setMgmtCard('gMonthGoalCard',monthPct);$('gMonthGoalPill').className='mgmt-pill '+mgmtStatus(monthPct);
+ put('gWeekGoal',`${installedPeriod.length} / ${weekGoal}`);put('gWeekGoalSub',`Semana ${week||1} · meta mensual ÷ 5`);put('gWeekGoalPill',mgmtStatusText(weekPct));setMgmtCard('gWeekGoalCard',weekPct);$('gWeekGoalPill').className='mgmt-pill '+mgmtStatus(weekPct);
+
+ put('gFactor',money(factor));put('gFactorSub',`${factorPct.toFixed(1)}% del objetivo ${money(factorTarget)}`);put('gFactorPill',mgmtStatusText(factorPct));setMgmtCard('gFactorCard',factorPct);$('gFactorPill').className='mgmt-pill '+mgmtStatus(factorPct);
+ put('gNonPay',nonpay.length);put('gNonPaySub',`Estimado no pagado: ${money(nonpayAmount)}`);
+ put('gBioFactor',money(bioFactor));put('gBioFactorSub',`${bio.length} instalación${bio.length===1?'':'es'} pagable${bio.length===1?'':'s'}`);
+ put('gGrabFactor',money(grabFactor));put('gGrabFactorSub',`${grab.length} instalación${grab.length===1?'':'es'} pagable${grab.length===1?'':'s'}`);
+ put('mgmtPeriodText',week?`${period} · Semana ${week}`:period);
+
+ let detail=nonpay.map(r=>`<tr><td>${fmt(r.ingreso)}</td><td>${r.cliente||'—'}</td><td>${r.asesor||'—'}</td><td>${r.producto||'—'}</td><td>${r.estado||'POR REVISAR'}</td><td>${money(r.cargo||0)}</td><td>${r.obs||'Sin motivo registrado'}</td></tr>`).join('');
+ if($('nonPayDetail'))$('nonPayDetail').innerHTML=`<table><thead><tr><th>F. ingreso</th><th>Cliente</th><th>Vendedor</th><th>Producto</th><th>Estado</th><th>Estimado</th><th>Motivo / OBS</th></tr></thead><tbody>${detail||'<tr><td colspan="7">No hay operaciones no pagables en el período.</td></tr>'}</tbody></table>`;
+ put('nonPayModalSub',`${nonpay.length} operaciones · estimado ${money(nonpayAmount)}`);
+
+ // La tabla económica sigue el mismo período visible: mes completo o semana elegida.
+ renderEconomicSellersV15(payable);
+}
+if($('mgmtWeek'))$('mgmtWeek').addEventListener('change',()=>{if(viewMode==='economic')renderGerenciaV15();});
+if($('gNonPayCard'))$('gNonPayCard').addEventListener('click',()=>{$('nonPayModal').classList.add('open');$('nonPayModal').setAttribute('aria-hidden','false');});
+if($('closeNonPay'))$('closeNonPay').addEventListener('click',()=>{$('nonPayModal').classList.remove('open');$('nonPayModal').setAttribute('aria-hidden','true');});
+if($('nonPayModal'))$('nonPayModal').addEventListener('click',e=>{if(e.target===$('nonPayModal'))$('closeNonPay').click();});
+const __renderAllV15=renderAll;
+renderAll=function(){__renderAllV15();renderGerenciaV15();};
+</script>
+</body></html>
