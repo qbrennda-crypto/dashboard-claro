@@ -1,0 +1,53 @@
+name: Actualizar Excel desde OneDrive
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  actualizar-excel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Descargar Excel desde OneDrive
+        run: |
+          curl -L --fail --retry 3 \
+            "https://jlbcorporacioncompe-my.sharepoint.com/:x:/g/personal/zoila_quintana_jlbcorporacion_com_pe/IQAokIeF3SG2S7r_-TtBJU13AZtUmkkWr1fg5Qi1SNfCnxk?download=1" \
+            -o ventas_claro.xlsx
+
+      - name: Verificar que el archivo sea un Excel
+        run: |
+          if [ ! -s ventas_claro.xlsx ]; then
+            echo "ERROR: El archivo descargado esta vacio."
+            exit 1
+          fi
+
+          echo "Excel descargado correctamente."
+          ls -lh ventas_claro.xlsx
+
+      - name: Guardar fecha y hora de actualizacion
+        run: |
+          TZ="America/Lima" date '+%d/%m/%Y · %I:%M %p' > ultima_actualizacion.txt
+          cat ultima_actualizacion.txt
+
+      - name: Guardar Excel actualizado en GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add ventas_claro.xlsx ultima_actualizacion.txt
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios nuevos."
+          else
+            git commit -m "Actualizar Excel desde OneDrive"
+            git push
+          fi
